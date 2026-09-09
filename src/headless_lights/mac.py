@@ -6,7 +6,8 @@ import subprocess
 
 DEFAULT_MAC_HOST = "michel@172.16.0.104"
 _RESPONSE = re.compile(
-    r"^(?:OK|PARTIAL) (?:color=[0-9a-f]{6}|effect=watercolor) "
+    r"^(?:OK|PARTIAL) "
+    r"(?:color=[0-9a-f]{6}|effect=(?:watercolor|stranger-things)) "
     r"icue=(?:ok|error) g560=(?:ok|error) scimitar=(?:ok|error)$"
 )
 
@@ -18,7 +19,7 @@ def send_agent_command(
     timeout: float = 10.0,
 ) -> str:
     if (
-        command not in {"STATUS", "EFFECT WATERCOLOR"}
+        command not in {"STATUS", "EFFECT WATERCOLOR", "EFFECT STRANGER-THINGS"}
         and not re.fullmatch(r"COLOR [0-9a-f]{6}", command)
     ):
         raise ValueError("invalid Mac agent command")

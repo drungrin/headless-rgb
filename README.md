@@ -82,9 +82,9 @@ headless-lights service-install 0000ff --fps 20
 ```
 
 Esse comando instala `headless-lights.service`. Ele não deve permanecer ativo ao
-mesmo tempo que o Watercolor com `--scope pc`, pois ambos usam a mesma porta
+mesmo tempo que um efeito animado com `--scope pc`, pois ambos usam a mesma porta
 serial. Na instalação atual, o serviço estático está desabilitado e o renderer
-Watercolor é o proprietário da Beelight.
+de efeitos é o proprietário da Beelight.
 
 ## Dispositivos OpenRGB locais
 
@@ -127,18 +127,24 @@ O alvo padrão é `michel@172.16.0.104`:
 headless-lights mac-status
 headless-lights mac-color 0000ff
 headless-lights mac-effect watercolor
+headless-lights mac-effect stranger-things
 ```
 
 `mac-color` aplica a cor ao K70 MAX, MM700, Scimitar e G560. Outro alvo pode ser
 informado com `--host usuario@endereco`. A compilação e instalação do agente
 estão descritas em [`mac-agent/README.md`](mac-agent/README.md).
 
-## Watercolor Spectrum
+## Efeitos animados
 
-O renderer recria o aspecto validado a partir da referência visual: faixas
-largas de ciano, azul, violeta, magenta, rosa e amarelo claro, com interpolação
-suave e deriva espacial. Ele roda a 12 FPS e usa o tempo Unix como relógio de
-fase comum entre Linux e Mac.
+O Watercolor Spectrum usa faixas largas de ciano, azul, violeta, magenta, rosa e
+amarelo claro, com interpolação suave e deriva espacial.
+
+O Stranger Things reproduz a parte ambiente do perfil oficial: fundo azul/roxo
+quase preto, ondas e chuva vermelhas e uma sequência de flashes a cada sete
+segundos. No Mac ele não reage às teclas.
+
+Os dois efeitos rodam a 12 FPS e usam o tempo Unix como relógio de fase comum
+entre Linux e Mac.
 
 Escopos disponíveis no Linux:
 
@@ -158,29 +164,32 @@ Previews temporários:
 headless-lights effect-preview watercolor --scope hub --seconds 20 --fps 12
 headless-lights effect-preview watercolor --scope local --seconds 20 --fps 12
 headless-lights effect-preview watercolor --scope pc --seconds 20 --fps 12
+headless-lights effect-preview stranger-things --scope pc --seconds 21 --fps 12
 ```
 
-Antes de executar um preview ou uma cor estática local enquanto o Watercolor
+Antes de executar um preview ou uma cor estática local enquanto um efeito
 persistente estiver ativo, pause o renderer; caso contrário, dois produtores
 enviarão quadros ao mesmo tempo:
 
 ```bash
-systemctl --user stop headless-lights-watercolor.service
+systemctl --user stop headless-lights-effect.service
 # execute o preview ou comando estático
-systemctl --user start headless-lights-watercolor.service
+systemctl --user start headless-lights-effect.service
 ```
 
 No Mac, `mac-color` troca o agente para cor estática. Use `mac-effect watercolor`
-para voltar à animação.
+ou `mac-effect stranger-things` para voltar a uma animação.
 
 Execução contínua em primeiro plano ou como serviço:
 
 ```bash
 headless-lights effect-hold watercolor --scope pc --fps 12
-headless-lights effect-service-install watercolor --scope pc --fps 12
+headless-lights effect-hold stranger-things --scope pc --fps 12
+headless-lights effect-service-install stranger-things --scope pc --fps 12
 ```
 
-O instalador grava e inicia `headless-lights-watercolor.service`.
+O instalador grava e inicia `headless-lights-effect.service`. Executá-lo com
+outro efeito substitui o renderer ativo.
 
 ## Serviços e ordem de inicialização
 
@@ -189,7 +198,7 @@ O instalador grava e inicia `headless-lights-watercolor.service`.
 | `headless-lights-ram.service` | oneshot | aplica o estado inicial das Vengeance |
 | `headless-lights-aura.service` | oneshot | configura a Asiahorse depois da RAM |
 | `headless-lights-hub.service` | contínuo | mantém o hub e o servidor OpenRGB em `127.0.0.1:6742` |
-| `headless-lights-watercolor.service` | contínuo | envia os quadros do efeito após o hub iniciar |
+| `headless-lights-effect.service` | contínuo | envia os quadros do efeito selecionado após o hub iniciar |
 | `com.headless-lights.agent` | LaunchAgent no Mac | anima K70, MM700, Scimitar e G560 |
 
 Estado dos serviços Linux:
@@ -199,7 +208,7 @@ systemctl --user status \
   headless-lights-ram.service \
   headless-lights-aura.service \
   headless-lights-hub.service \
-  headless-lights-watercolor.service
+  headless-lights-effect.service
 ```
 
 ## Adição dos dois fans futuros
@@ -209,7 +218,7 @@ topologia e depois o renderer para obter as oito zonas novas:
 
 ```bash
 systemctl --user restart headless-lights-hub.service
-systemctl --user restart headless-lights-watercolor.service
+systemctl --user restart headless-lights-effect.service
 ```
 
 O backend aceitará automaticamente oito fans quando o hub reportar 144 LEDs —
@@ -222,8 +231,8 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
 Os testes cobrem o protocolo Beelight, transporte SSH, seleção segura dos
-dispositivos OpenRGB, topologias de seis e oito fans, unidades systemd e o
-renderer Watercolor.
+dispositivos OpenRGB, topologias de seis e oito fans, unidades systemd e os
+renderers Watercolor e Stranger Things.
 
 ## Próximas expansões
 

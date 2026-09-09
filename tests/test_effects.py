@@ -5,6 +5,8 @@ import unittest
 from headless_lights.effects import (
     render_watercolor_fans,
     render_watercolor_line,
+    render_stranger_fans,
+    stranger_things_color,
     watercolor_color,
 )
 
@@ -44,6 +46,19 @@ class WatercolorTests(unittest.TestCase):
 
         self.assertEqual(len(first), 12)
         self.assertNotEqual(first, second)
+
+    def test_stranger_frame_matches_lx_topology(self) -> None:
+        frame = render_stranger_fans(6, elapsed=1.5)
+
+        self.assertEqual(len(frame), 6)
+        self.assertTrue(all(len(fan) == 18 for fan in frame))
+
+    def test_stranger_is_dark_between_red_flashes(self) -> None:
+        quiet = stranger_things_color(0.2, 1.0)
+        flash = stranger_things_color(0.2, 7.0 * 0.7110655737704918)
+
+        self.assertGreater(flash[0], quiet[0])
+        self.assertGreater(flash[0], flash[2])
 
 
 if __name__ == "__main__":

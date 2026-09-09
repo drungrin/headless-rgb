@@ -10,18 +10,19 @@ from headless_lights.service import (
     HUB_SERVICE_NAME,
     RAM_SERVICE_NAME,
     SERVICE_NAME,
-    WATERCOLOR_SERVICE_NAME,
+    EFFECT_SERVICE_NAME,
+    LEGACY_WATERCOLOR_SERVICE_NAME,
     _systemd_quote,
     build_aura_user_unit,
     build_hub_user_unit,
     build_ram_user_unit,
     build_user_unit,
-    build_watercolor_user_unit,
+    build_effect_user_unit,
     install_aura_user_service,
     install_hub_user_service,
     install_ram_user_service,
     install_user_service,
-    install_watercolor_user_service,
+    install_effect_user_service,
 )
 
 
@@ -162,16 +163,16 @@ class ServiceTests(unittest.TestCase):
                 ],
             )
 
-    def test_watercolor_unit_requires_hub_server(self) -> None:
-        unit = build_watercolor_user_unit(scope="local", fps=12)
+    def test_effect_unit_requires_hub_server(self) -> None:
+        unit = build_effect_user_unit("stranger-things", scope="local", fps=12)
 
-        self.assertIn('"effect-hold" "watercolor"', unit)
+        self.assertIn('"effect-hold" "stranger-things"', unit)
         self.assertIn(f"After={HUB_SERVICE_NAME}", unit)
         self.assertIn(f"Requires={HUB_SERVICE_NAME}", unit)
         self.assertIn('"--scope" "local"', unit)
         self.assertIn('"--fps" "12"', unit)
 
-    def test_install_watercolor_service_writes_and_starts_unit(self) -> None:
+    def test_install_effect_service_migrates_legacy_unit(self) -> None:
         with TemporaryDirectory() as temporary_home:
             with (
                 patch(
@@ -180,16 +181,25 @@ class ServiceTests(unittest.TestCase):
                 ),
                 patch("headless_lights.service.subprocess.run") as run,
             ):
-                unit_path = install_watercolor_user_service(scope="local", fps=12)
+                unit_path = install_effect_user_service(
+                    "stranger-things", scope="local", fps=12
+                )
 
-            self.assertEqual(unit_path.name, WATERCOLOR_SERVICE_NAME)
-            self.assertIn('"effect-hold" "watercolor"', unit_path.read_text())
+            self.assertEqual(unit_path.name, EFFECT_SERVICE_NAME)
+            self.assertIn('"effect-hold" "stranger-things"', unit_path.read_text())
             self.assertEqual(
                 [call.args[0] for call in run.call_args_list],
                 [
+                    (
+                        "systemctl",
+                        "--user",
+                        "disable",
+                        "--now",
+                        LEGACY_WATERCOLOR_SERVICE_NAME,
+                    ),
                     ("systemctl", "--user", "daemon-reload"),
-                    ("systemctl", "--user", "enable", WATERCOLOR_SERVICE_NAME),
-                    ("systemctl", "--user", "restart", WATERCOLOR_SERVICE_NAME),
+                    ("systemctl", "--user", "enable", EFFECT_SERVICE_NAME),
+                    ("systemctl", "--user", "restart", EFFECT_SERVICE_NAME),
                 ],
             )
 

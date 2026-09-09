@@ -13,7 +13,8 @@ SERVICE_NAME = "headless-lights.service"
 RAM_SERVICE_NAME = "headless-lights-ram.service"
 AURA_SERVICE_NAME = "headless-lights-aura.service"
 HUB_SERVICE_NAME = "headless-lights-hub.service"
-WATERCOLOR_SERVICE_NAME = "headless-lights-watercolor.service"
+EFFECT_SERVICE_NAME = "headless-lights-effect.service"
+LEGACY_WATERCOLOR_SERVICE_NAME = "headless-lights-watercolor.service"
 
 
 def _validate_stream_options(
@@ -288,18 +289,20 @@ def install_hub_user_service(color: str) -> Path:
     return unit_path
 
 
-def build_watercolor_user_unit(*, scope: str, fps: int) -> str:
+def build_effect_user_unit(effect: str, *, scope: str, fps: int) -> str:
     if not 1 <= fps <= 30:
         raise ValueError("effect FPS must be between 1 and 30")
     if scope not in {"hub", "local", "pc"}:
         raise ValueError("effect scope must be hub, local or pc")
+    if effect not in {"watercolor", "stranger-things"}:
+        raise ValueError("unknown effect")
     source_root = Path(__file__).resolve().parents[1]
     arguments = [
         sys.executable,
         "-m",
         "headless_lights",
         "effect-hold",
-        "watercolor",
+        effect,
         "--scope",
         scope,
         "--fps",
@@ -307,7 +310,7 @@ def build_watercolor_user_unit(*, scope: str, fps: int) -> str:
     ]
     exec_start = " ".join(_systemd_quote(argument) for argument in arguments)
     return f"""[Unit]
-Description=Headless Lights Watercolor Spectrum renderer
+Description=Headless Lights animated effect renderer
 After={HUB_SERVICE_NAME}
 Requires={HUB_SERVICE_NAME}
 
@@ -324,24 +327,35 @@ WantedBy=default.target
 """
 
 
-def install_watercolor_user_service(*, scope: str, fps: int) -> Path:
-    unit = build_watercolor_user_unit(scope=scope, fps=fps)
+def install_effect_user_service(effect: str, *, scope: str, fps: int) -> Path:
+    unit = build_effect_user_unit(effect, scope=scope, fps=fps)
     unit_dir = Path.home() / ".config" / "systemd" / "user"
     unit_dir.mkdir(parents=True, exist_ok=True)
-    unit_path = unit_dir / WATERCOLOR_SERVICE_NAME
+    unit_path = unit_dir / EFFECT_SERVICE_NAME
     unit_path.write_text(unit, encoding="utf-8")
+    subprocess.run(
+        (
+            "systemctl",
+            "--user",
+            "disable",
+            "--now",
+            LEGACY_WATERCOLOR_SERVICE_NAME,
+        ),
+        check=False,
+        timeout=15,
+    )
     subprocess.run(
         ("systemctl", "--user", "daemon-reload"),
         check=True,
         timeout=10,
     )
     subprocess.run(
-        ("systemctl", "--user", "enable", WATERCOLOR_SERVICE_NAME),
+        ("systemctl", "--user", "enable", EFFECT_SERVICE_NAME),
         check=True,
         timeout=15,
     )
     subprocess.run(
-        ("systemctl", "--user", "restart", WATERCOLOR_SERVICE_NAME),
+        ("systemctl", "--user", "restart", EFFECT_SERVICE_NAME),
         check=True,
         timeout=15,
     )

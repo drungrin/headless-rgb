@@ -13,7 +13,7 @@ from headless_lights.aura import (
 )
 from headless_lights.beelight.device import BeelightDevice, discover_port
 from headless_lights.beelight import protocol
-from headless_lights.effects import hold_watercolor, preview_watercolor
+from headless_lights.effects import hold_effect, preview_effect
 from headless_lights.hub import hold_hub_color
 from headless_lights.mac import DEFAULT_MAC_HOST, send_agent_command
 from headless_lights.ram import set_corsair_memory_color
@@ -23,7 +23,7 @@ from headless_lights.service import (
     install_hub_user_service,
     install_ram_user_service,
     install_user_service,
-    install_watercolor_user_service,
+    install_effect_user_service,
 )
 
 
@@ -80,7 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
         "mac-effect",
         help="start an animated effect on the Mac agent",
     )
-    mac_effect.add_argument("effect", choices=("watercolor",))
+    mac_effect.add_argument("effect", choices=("watercolor", "stranger-things"))
     mac_effect.add_argument("--host", default=DEFAULT_MAC_HOST)
     mac_effect.add_argument("--ssh-timeout", type=float, default=10.0)
 
@@ -124,7 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
         "effect-preview",
         help="run a temporary animated effect preview",
     )
-    effect_preview.add_argument("effect", choices=("watercolor",))
+    effect_preview.add_argument("effect", choices=("watercolor", "stranger-things"))
     effect_preview.add_argument(
         "--scope", choices=("hub", "local", "pc"), default="hub"
     )
@@ -135,7 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
         "effect-hold",
         help="continuously render an animated effect",
     )
-    effect_hold.add_argument("effect", choices=("watercolor",))
+    effect_hold.add_argument("effect", choices=("watercolor", "stranger-things"))
     effect_hold.add_argument(
         "--scope", choices=("hub", "local", "pc"), default="hub"
     )
@@ -145,7 +145,7 @@ def build_parser() -> argparse.ArgumentParser:
         "effect-service-install",
         help="install and start a persistent animated effect",
     )
-    effect_install.add_argument("effect", choices=("watercolor",))
+    effect_install.add_argument("effect", choices=("watercolor", "stranger-things"))
     effect_install.add_argument(
         "--scope", choices=("hub", "local", "pc"), default="hub"
     )
@@ -201,9 +201,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
             return
         if args.action == "mac-effect":
+            command_effect = args.effect.upper()
             print(
                 send_agent_command(
-                    "EFFECT WATERCOLOR",
+                    f"EFFECT {command_effect}",
                     host=args.host,
                     timeout=args.ssh_timeout,
                 )
@@ -246,13 +247,22 @@ def main(argv: Sequence[str] | None = None) -> None:
             print(f"installed and started: {unit_path}")
             return
         if args.action == "effect-preview":
-            preview_watercolor(scope=args.scope, seconds=args.seconds, fps=args.fps)
+            preview_effect(
+                args.effect,
+                scope=args.scope,
+                seconds=args.seconds,
+                fps=args.fps,
+            )
             return
         if args.action == "effect-hold":
-            hold_watercolor(scope=args.scope, fps=args.fps)
+            hold_effect(args.effect, scope=args.scope, fps=args.fps)
             return
         if args.action == "effect-service-install":
-            unit_path = install_watercolor_user_service(scope=args.scope, fps=args.fps)
+            unit_path = install_effect_user_service(
+                args.effect,
+                scope=args.scope,
+                fps=args.fps,
+            )
             print(f"installed and started: {unit_path}")
             return
 

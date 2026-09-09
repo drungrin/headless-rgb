@@ -69,6 +69,23 @@ constexpr std::array<Color, 7> kWatercolorPalette{{
     {164, 255, 241},
 }};
 
+struct FlashStop {
+    double phase;
+    Color color;
+    double opacity;
+};
+
+constexpr std::array<FlashStop, 8> kStrangerFlashStops{{
+    {0.6270491803278688, {128, 43, 36}, 1.0},
+    {0.6516393442622951, {128, 0, 0}, 0.0},
+    {0.6536885245901639, {128, 0, 0}, 1.0},
+    {0.6762295081967213, {128, 0, 0}, 0.27451},
+    {0.7028688524590164, {128, 0, 0}, 0.290196},
+    {0.7110655737704918, {128, 43, 36}, 1.0},
+    {0.7356557377049180, {128, 0, 0}, 1.0},
+    {0.7561475409836066, {128, 0, 0}, 0.0},
+}};
+
 int smooth_mix(int left, int right, double amount) {
     const double weight = (1.0 - std::cos(M_PI * amount)) / 2.0;
     return static_cast<int>(std::lround(left * (1.0 - weight) + right * weight));
@@ -101,6 +118,99 @@ Color watercolor_color(double position, double elapsed) {
         channel(left.green, right.green),
         channel(left.blue, right.blue),
     };
+}
+
+Color mix_color(Color left, Color right, double amount) {
+    const auto channel = [amount](int left_value, int right_value) {
+        return static_cast<unsigned char>(std::clamp(
+            std::lround(left_value * (1.0 - amount) + right_value * amount),
+            0L,
+            255L));
+    };
+    return {
+        channel(left.red, right.red),
+        channel(left.green, right.green),
+        channel(left.blue, right.blue),
+    };
+}
+
+Color screen_color(Color base, Color layer, double opacity) {
+    opacity = std::clamp(opacity, 0.0, 1.0);
+    const auto channel = [opacity](int base_value, int layer_value) {
+        return static_cast<unsigned char>(std::clamp(
+            std::lround(
+                255.0 - (255.0 - base_value) *
+                (255.0 - layer_value * opacity) / 255.0),
+            0L,
+            255L));
+    };
+    return {
+        channel(base.red, layer.red),
+        channel(base.green, layer.green),
+        channel(base.blue, layer.blue),
+    };
+}
+
+double circular_peak(double phase, double center, double width) {
+    double distance = std::abs(std::fmod(phase - center + 1.5, 1.0) - 0.5);
+    if (distance >= width) {
+        return 0.0;
+    }
+    const double normalized = 1.0 - distance / width;
+    return normalized * normalized * (3.0 - 2.0 * normalized);
+}
+
+std::pair<Color, double> stranger_flash(double elapsed) {
+    const double phase = std::fmod(elapsed, 7.0) / 7.0;
+    if (phase < kStrangerFlashStops.front().phase ||
+        phase > kStrangerFlashStops.back().phase) {
+        return {{0, 0, 0}, 0.0};
+    }
+    for (std::size_t index = 0; index + 1 < kStrangerFlashStops.size(); ++index) {
+        const FlashStop left = kStrangerFlashStops[index];
+        const FlashStop right = kStrangerFlashStops[index + 1];
+        if (left.phase <= phase && phase <= right.phase) {
+            const double amount =
+                (phase - left.phase) / (right.phase - left.phase);
+            return {
+                mix_color(left.color, right.color, amount),
+                left.opacity * (1.0 - amount) + right.opacity * amount,
+            };
+        }
+    }
+    return {{0, 0, 0}, 0.0};
+}
+
+Color stranger_things_color(double position, double elapsed, int lane) {
+    const double purple_amount = 0.5 + 0.5 * std::sin(
+        2.0 * M_PI * (position * 0.73 + elapsed / 8.5));
+    Color color = mix_color({6, 4, 23}, {10, 4, 46}, purple_amount);
+    const double red_wave_fast = circular_peak(
+        std::fmod(position - elapsed / 4.8 + 1000.0, 1.0),
+        0.18 + (lane % 3) * 0.19,
+        0.24);
+    const double red_wave_slow = circular_peak(
+        std::fmod(position - elapsed / 9.5 + 1000.0, 1.0),
+        0.71 - (lane % 2) * 0.17,
+        0.18);
+    color = screen_color(color, {125, 0, 0}, red_wave_fast * 0.92);
+    color = screen_color(color, {125, 0, 1}, red_wave_slow * 0.72);
+    const double rain_phase_1 = std::fmod(
+        position * 7.0 + elapsed * 0.82 + lane * 0.37,
+        1.0);
+    const double rain_phase_2 = std::fmod(
+        position * 11.0 + elapsed * 0.57 + lane * 0.61,
+        1.0);
+    color = screen_color(
+        color,
+        {128, 0, 0},
+        circular_peak(rain_phase_1, 0.08, 0.065) * 0.9);
+    color = screen_color(
+        color,
+        {64, 0, 0},
+        circular_peak(rain_phase_2, 0.56, 0.045) * 0.85);
+    const auto flash = stranger_flash(elapsed);
+    return screen_color(color, flash.first, flash.second);
 }
 
 bool parse_color(std::string value, Color& color) {
@@ -250,6 +360,57 @@ public:
                     frame.push_back(watercolor_color(
                         0.54 + 0.68 * index / denominator,
                         elapsed));
+                }
+            }
+            success = write_frame(device, frame, false) && success;
+        }
+        return success;
+    }
+
+    bool set_stranger(double elapsed) {
+        bool success = true;
+        for (const Device& device : devices_) {
+            if (device.leds.empty()) {
+                success = false;
+                continue;
+            }
+            std::vector<Color> frame;
+            frame.reserve(device.leds.size());
+            if (device.info.type == CDT_Keyboard) {
+                const auto minmax_x = std::minmax_element(
+                    device.leds.begin(),
+                    device.leds.end(),
+                    [](const CorsairLedPosition& left,
+                       const CorsairLedPosition& right) {
+                        return left.cx < right.cx;
+                    });
+                const auto minmax_y = std::minmax_element(
+                    device.leds.begin(),
+                    device.leds.end(),
+                    [](const CorsairLedPosition& left,
+                       const CorsairLedPosition& right) {
+                        return left.cy < right.cy;
+                    });
+                const double x_range =
+                    std::max(1.0, minmax_x.second->cx - minmax_x.first->cx);
+                const double y_range =
+                    std::max(1.0, minmax_y.second->cy - minmax_y.first->cy);
+                for (const CorsairLedPosition& led : device.leds) {
+                    const double x = (led.cx - minmax_x.first->cx) / x_range;
+                    const double y = (led.cy - minmax_y.first->cy) / y_range;
+                    frame.push_back(stranger_things_color(
+                        0.11 + x * 1.28 + y * 0.2,
+                        elapsed,
+                        static_cast<int>(std::lround(y * 5.0))));
+                }
+            } else {
+                const double denominator =
+                    std::max<std::size_t>(1, device.leds.size() - 1);
+                for (std::size_t index = 0; index < device.leds.size(); ++index) {
+                    frame.push_back(stranger_things_color(
+                        0.57 + 0.82 * index / denominator,
+                        elapsed,
+                        8));
                 }
             }
             success = write_frame(device, frame, false) && success;
@@ -534,6 +695,12 @@ struct ApplyResult {
     bool scimitar;
 };
 
+enum class AgentEffect {
+    Static,
+    Watercolor,
+    StrangerThings,
+};
+
 ApplyResult apply_color(
     ICueBackend& icue,
     G560Backend& g560,
@@ -566,6 +733,56 @@ ApplyResult apply_watercolor(
     };
 }
 
+ApplyResult apply_stranger(
+    ICueBackend& icue,
+    G560Backend& g560,
+    ScimitarBackend& scimitar,
+    double elapsed) {
+    std::array<Color, 4> g560_colors{};
+    for (std::size_t zone = 0; zone < g560_colors.size(); ++zone) {
+        g560_colors[zone] = stranger_things_color(
+            0.31 + zone * 0.33,
+            elapsed,
+            20 + static_cast<int>(zone));
+    }
+    std::array<Color, 3> scimitar_colors{};
+    for (std::size_t zone = 0; zone < scimitar_colors.size(); ++zone) {
+        scimitar_colors[zone] = stranger_things_color(
+            0.53 + zone * 0.27,
+            elapsed,
+            24 + static_cast<int>(zone));
+    }
+    return {
+        icue.set_stranger(elapsed),
+        g560.set_colors(g560_colors),
+        scimitar.set_colors(scimitar_colors),
+    };
+}
+
+const char* effect_name(AgentEffect effect) {
+    switch (effect) {
+        case AgentEffect::Watercolor:
+            return "watercolor";
+        case AgentEffect::StrangerThings:
+            return "stranger-things";
+        case AgentEffect::Static:
+            return "static";
+    }
+    return "unknown";
+}
+
+ApplyResult apply_effect(
+    AgentEffect effect,
+    ICueBackend& icue,
+    G560Backend& g560,
+    ScimitarBackend& scimitar,
+    double elapsed) {
+    if (effect == AgentEffect::Watercolor) {
+        return apply_watercolor(icue, g560, scimitar, elapsed);
+    }
+    return apply_stranger(icue, g560, scimitar, elapsed);
+}
+
 std::string result_line(Color color, ApplyResult result) {
     std::ostringstream output;
     output << (result.icue && result.g560 && result.scimitar ? "OK" : "PARTIAL")
@@ -576,10 +793,10 @@ std::string result_line(Color color, ApplyResult result) {
     return output.str();
 }
 
-std::string effect_result_line(ApplyResult result) {
+std::string effect_result_line(const std::string& effect, ApplyResult result) {
     std::ostringstream output;
     output << (result.icue && result.g560 && result.scimitar ? "OK" : "PARTIAL")
-           << " effect=watercolor"
+           << " effect=" << effect
            << " icue=" << (result.icue ? "ok" : "error")
            << " g560=" << (result.g560 ? "ok" : "error")
            << " scimitar=" << (result.scimitar ? "ok" : "error") << "\n";
@@ -610,7 +827,7 @@ int create_server() {
 int main(int argc, char** argv) {
     Color current{0, 0, 255};
     bool include_mousemat = false;
-    bool watercolor = false;
+    AgentEffect effect = AgentEffect::Static;
     for (int index = 1; index < argc; ++index) {
         const std::string argument(argv[index]);
         if (argument == "--include-mm700") {
@@ -620,15 +837,21 @@ int main(int argc, char** argv) {
                 std::cerr << "invalid color" << std::endl;
                 return 64;
             }
+            effect = AgentEffect::Static;
         } else if (argument == "--effect" && index + 1 < argc) {
-            if (std::string(argv[++index]) != "watercolor") {
+            const std::string effect_argument(argv[++index]);
+            if (effect_argument == "watercolor") {
+                effect = AgentEffect::Watercolor;
+            } else if (effect_argument == "stranger-things") {
+                effect = AgentEffect::StrangerThings;
+            } else {
                 std::cerr << "invalid effect" << std::endl;
                 return 64;
             }
-            watercolor = true;
         } else {
             std::cerr
-                << "usage: mac-agent [--color RRGGBB | --effect watercolor] "
+                << "usage: mac-agent [--color RRGGBB | "
+                   "--effect watercolor|stranger-things] "
                    "[--include-mm700]"
                 << std::endl;
             return 64;
@@ -656,12 +879,12 @@ int main(int argc, char** argv) {
         return std::chrono::duration<double>(
             std::chrono::system_clock::now().time_since_epoch()).count();
     };
-    ApplyResult last_result = watercolor
-        ? apply_watercolor(icue, g560, scimitar, effect_seconds())
-        : apply_color(icue, g560, scimitar, current);
-    std::cout << (watercolor
-        ? effect_result_line(last_result)
-        : result_line(current, last_result));
+    ApplyResult last_result = effect == AgentEffect::Static
+        ? apply_color(icue, g560, scimitar, current)
+        : apply_effect(effect, icue, g560, scimitar, effect_seconds());
+    std::cout << (effect == AgentEffect::Static
+        ? result_line(current, last_result)
+        : effect_result_line(effect_name(effect), last_result));
 
     const int server = create_server();
     if (server < 0) {
@@ -698,7 +921,7 @@ int main(int argc, char** argv) {
                     if (command.rfind("COLOR ", 0) == 0) {
                         Color requested{};
                         if (parse_color(command.substr(6), requested)) {
-                            watercolor = false;
+                            effect = AgentEffect::Static;
                             current = requested;
                             last_result = apply_color(icue, g560, scimitar, current);
                             response = result_line(current, last_result);
@@ -706,17 +929,27 @@ int main(int argc, char** argv) {
                             response = "ERROR color\n";
                         }
                     } else if (command == "EFFECT WATERCOLOR") {
-                        watercolor = true;
-                        last_result = apply_watercolor(
+                        effect = AgentEffect::Watercolor;
+                        last_result = apply_effect(
+                            effect,
                             icue,
                             g560,
                             scimitar,
                             effect_seconds());
-                        response = effect_result_line(last_result);
+                        response = effect_result_line(effect_name(effect), last_result);
+                    } else if (command == "EFFECT STRANGER-THINGS") {
+                        effect = AgentEffect::StrangerThings;
+                        last_result = apply_effect(
+                            effect,
+                            icue,
+                            g560,
+                            scimitar,
+                            effect_seconds());
+                        response = effect_result_line(effect_name(effect), last_result);
                     } else if (command == "STATUS") {
-                        response = watercolor
-                            ? effect_result_line(last_result)
-                            : result_line(current, last_result);
+                        response = effect == AgentEffect::Static
+                            ? result_line(current, last_result)
+                            : effect_result_line(effect_name(effect), last_result);
                     }
                 }
                 send(client, response.data(), response.size(), 0);
@@ -725,8 +958,9 @@ int main(int argc, char** argv) {
         }
         static auto next_effect_frame = std::chrono::steady_clock::now();
         const auto now = std::chrono::steady_clock::now();
-        if (watercolor && now >= next_effect_frame) {
-            last_result = apply_watercolor(
+        if (effect != AgentEffect::Static && now >= next_effect_frame) {
+            last_result = apply_effect(
+                effect,
                 icue,
                 g560,
                 scimitar,

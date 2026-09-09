@@ -61,6 +61,19 @@ class MacAgentTests(unittest.TestCase):
         self.assertIn("effect=watercolor", response)
         self.assertEqual(run.call_args.kwargs["input"], "EFFECT WATERCOLOR\n")
 
+    @patch("headless_lights.mac.subprocess.run")
+    def test_accepts_stranger_things_effect_response(self, run) -> None:
+        run.return_value = subprocess.CompletedProcess(
+            args=(),
+            returncode=0,
+            stdout="OK effect=stranger-things icue=ok g560=ok scimitar=ok\n",
+            stderr="",
+        )
+
+        response = send_agent_command("EFFECT STRANGER-THINGS")
+
+        self.assertIn("effect=stranger-things", response)
+
     def test_rejects_option_like_host(self) -> None:
         with self.assertRaises(ValueError):
             send_agent_command("STATUS", host="-oProxyCommand=bad")

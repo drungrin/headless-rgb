@@ -24,13 +24,17 @@ argumentos ele apenas enumera; com
 O formato vem do OpenLinkHub e o arquivo é GPL-3.0-or-later.
 
 `agent.cpp` reúne os três backends validados e escuta somente em
-`127.0.0.1:7531`. O PC envia `COLOR RRGGBB`, `EFFECT WATERCOLOR` ou `STATUS`
-através de uma sessão SSH. Por padrão o binário controla K70 MAX, Scimitar e
-G560; a instalação usa `--include-mm700` para incluir explicitamente o mousepad.
+`127.0.0.1:7531`. O PC envia `COLOR RRGGBB`, `EFFECT WATERCOLOR`,
+`EFFECT STRANGER-THINGS` ou `STATUS` através de uma sessão SSH. Por padrão o
+binário controla K70 MAX, Scimitar e G560; a instalação usa `--include-mm700`
+para incluir explicitamente o mousepad.
 
 `--effect watercolor` executa localmente o mesmo renderer temporal usado no PC,
 com gradiente por tecla no K70 e amostras independentes por zona no MM700, G560
 e Scimitar. O tempo Unix mantém a fase alinhada entre as duas máquinas.
+
+`--effect stranger-things` reproduz somente a animação ambiente do perfil, sem
+captura de teclas ou camadas reativas.
 
 Para compilar, instalar e carregar o LaunchAgent no Mac:
 
@@ -41,5 +45,5 @@ sh install.sh /caminho/para/iCUESDK.framework
 O instalador usa o `hidapi` do Homebrew, grava os arquivos em
 `~/Library/Application Support/headless-lights` e instala
 `~/Library/LaunchAgents/com.headless-lights.agent.plist`. O processo inicia em
-Watercolor Spectrum, inclui explicitamente o MM700, reinicia se o iCUE ainda não
+Stranger Things, inclui explicitamente o MM700, reinicia se o iCUE ainda não
 estiver disponível e não expõe uma porta na rede.
