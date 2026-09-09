@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.DS_Store
+*.mp4
+*.log
+*.cueprofile
+icue_macos_home_externo_solucao.md

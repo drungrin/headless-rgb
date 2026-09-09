@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "headless-lights"
+version = "0.1.0"
+description = "Headless RGB controller, starting with the Beelight USB strip"
+requires-python = ">=3.11"
+dependencies = [
+    "openrgb-python>=0.3.6,<0.4",
+]
+
+[project.scripts]
+headless-lights = "headless_lights.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
