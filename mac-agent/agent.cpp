@@ -157,6 +157,11 @@ Color screen_color(Color base, Color layer, double opacity) {
     };
 }
 
+double wrap_phase(double phase) {
+    phase = std::fmod(phase, 1.0);
+    return phase < 0.0 ? phase + 1.0 : phase;
+}
+
 double circular_peak(double phase, double center, double width) {
     double distance = std::abs(std::fmod(phase - center + 1.5, 1.0) - 0.5);
     if (distance >= width) {
@@ -217,6 +222,22 @@ Color stranger_things_color(double position, double elapsed, int lane) {
         circular_peak(rain_phase_2, 0.56, 0.045) * 0.85);
     const auto flash = stranger_flash(elapsed);
     return screen_color(color, flash.first, flash.second);
+}
+
+Color borderlands4_color(double position, double elapsed, int lane) {
+    const double red_pulse = 0.18 + 0.12 * (
+        1.0 + std::sin(2.0 * M_PI * (elapsed / 3.0 + lane * 0.11))) / 2.0;
+    Color color = mix_color({192, 0, 2}, {255, 18, 0}, red_pulse);
+    const double orange_wave = circular_peak(
+        wrap_phase(position - elapsed / 5.0 + lane * 0.071),
+        0.36,
+        0.25);
+    const double gold_wave = circular_peak(
+        wrap_phase(position - elapsed / 7.3 - lane * 0.043),
+        0.74,
+        0.17);
+    color = screen_color(color, {255, 125, 0}, orange_wave * 0.92);
+    return screen_color(color, {250, 180, 0}, gold_wave * 0.76);
 }
 
 bool parse_color(std::string value, Color& color) {
@@ -297,6 +318,20 @@ public:
             if (coordinate.mapped) {
                 frame[index] = stranger_things_color(
                     0.11 + coordinate.x * 1.28 + coordinate.y * 0.2,
+                    elapsed,
+                    static_cast<int>(std::lround(coordinate.y * 5.0)));
+            }
+        }
+        return set_frame(frame);
+    }
+
+    bool set_borderlands4(double elapsed) {
+        std::array<Color, kK70LedCoordinates.size()> frame{};
+        for (std::size_t index = 0; index < frame.size(); ++index) {
+            const K70LedCoordinate coordinate = kK70LedCoordinates[index];
+            if (coordinate.mapped) {
+                frame[index] = borderlands4_color(
+                    0.12 + coordinate.x * 1.16 + coordinate.y * 0.2,
                     elapsed,
                     static_cast<int>(std::lround(coordinate.y * 5.0)));
             }
@@ -431,6 +466,17 @@ public:
         std::array<Color, 3> colors{};
         for (std::size_t zone = 0; zone < colors.size(); ++zone) {
             colors[zone] = stranger_things_color(
+                0.57 + zone * 0.41,
+                elapsed,
+                8 + static_cast<int>(zone));
+        }
+        return set_colors(colors);
+    }
+
+    bool set_borderlands4(double elapsed) {
+        std::array<Color, 3> colors{};
+        for (std::size_t zone = 0; zone < colors.size(); ++zone) {
+            colors[zone] = borderlands4_color(
                 0.57 + zone * 0.41,
                 elapsed,
                 8 + static_cast<int>(zone));
@@ -875,6 +921,7 @@ enum class AgentEffect {
     Static,
     Watercolor,
     StrangerThings,
+    Borderlands4,
 };
 
 ApplyResult apply_color(
@@ -941,12 +988,42 @@ ApplyResult apply_stranger(
     };
 }
 
+ApplyResult apply_borderlands4(
+    K70Backend& k70,
+    MM700Backend& mm700,
+    G560Backend& g560,
+    ScimitarBackend& scimitar,
+    double elapsed) {
+    std::array<Color, 4> g560_colors{};
+    for (std::size_t zone = 0; zone < g560_colors.size(); ++zone) {
+        g560_colors[zone] = borderlands4_color(
+            0.31 + zone * 0.33,
+            elapsed,
+            20 + static_cast<int>(zone));
+    }
+    std::array<Color, 3> scimitar_colors{};
+    for (std::size_t zone = 0; zone < scimitar_colors.size(); ++zone) {
+        scimitar_colors[zone] = borderlands4_color(
+            0.53 + zone * 0.27,
+            elapsed,
+            24 + static_cast<int>(zone));
+    }
+    return {
+        k70.set_borderlands4(elapsed),
+        mm700.set_borderlands4(elapsed),
+        g560.set_colors(g560_colors),
+        scimitar.set_colors(scimitar_colors),
+    };
+}
+
 const char* effect_name(AgentEffect effect) {
     switch (effect) {
         case AgentEffect::Watercolor:
             return "watercolor";
         case AgentEffect::StrangerThings:
             return "stranger-things";
+        case AgentEffect::Borderlands4:
+            return "borderlands-4";
         case AgentEffect::Static:
             return "static";
     }
@@ -963,7 +1040,10 @@ ApplyResult apply_effect(
     if (effect == AgentEffect::Watercolor) {
         return apply_watercolor(k70, mm700, g560, scimitar, elapsed);
     }
-    return apply_stranger(k70, mm700, g560, scimitar, elapsed);
+    if (effect == AgentEffect::StrangerThings) {
+        return apply_stranger(k70, mm700, g560, scimitar, elapsed);
+    }
+    return apply_borderlands4(k70, mm700, g560, scimitar, elapsed);
 }
 
 std::string result_line(Color color, ApplyResult result) {
@@ -1033,6 +1113,8 @@ int main(int argc, char** argv) {
                 effect = AgentEffect::Watercolor;
             } else if (effect_argument == "stranger-things") {
                 effect = AgentEffect::StrangerThings;
+            } else if (effect_argument == "borderlands-4") {
+                effect = AgentEffect::Borderlands4;
             } else {
                 std::cerr << "invalid effect" << std::endl;
                 return 64;
@@ -1040,7 +1122,7 @@ int main(int argc, char** argv) {
         } else {
             std::cerr
                 << "usage: mac-agent [--color RRGGBB | "
-                   "--effect watercolor|stranger-things | "
+                   "--effect watercolor|stranger-things|borderlands-4 | "
                    "--request-accessibility]"
                 << std::endl;
             return 64;
@@ -1153,6 +1235,16 @@ int main(int argc, char** argv) {
                         response = effect_result_line(effect_name(effect), last_result);
                     } else if (command == "EFFECT STRANGER-THINGS") {
                         effect = AgentEffect::StrangerThings;
+                        last_result = apply_effect(
+                            effect,
+                            k70,
+                            mm700,
+                            g560,
+                            scimitar,
+                            effect_seconds());
+                        response = effect_result_line(effect_name(effect), last_result);
+                    } else if (command == "EFFECT BORDERLANDS-4") {
+                        effect = AgentEffect::Borderlands4;
                         last_result = apply_effect(
                             effect,
                             k70,

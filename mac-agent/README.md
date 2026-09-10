@@ -29,7 +29,8 @@ CoreGraphics, sem observar as teclas do K70.
 
 `agent.cpp` reúne quatro backends HID diretos e escuta somente em
 `127.0.0.1:7531`. O PC envia `COLOR RRGGBB`, `EFFECT WATERCOLOR`,
-`EFFECT STRANGER-THINGS` ou `STATUS` através de uma sessão SSH. Por padrão o
+`EFFECT STRANGER-THINGS`, `EFFECT BORDERLANDS-4` ou `STATUS` através de uma
+sessão SSH. Por padrão o
 binário controla K70 MAX, MM700, Scimitar e G560.
 
 `--effect watercolor` executa localmente o mesmo renderer temporal usado no PC,
@@ -38,6 +39,9 @@ e Scimitar. O tempo Unix mantém a fase alinhada entre as duas máquinas.
 
 `--effect stranger-things` reproduz somente a animação ambiente do perfil, sem
 captura de teclas ou camadas reativas.
+
+`--effect borderlands-4` reproduz as camadas contínuas vermelha, laranja e
+dourada do perfil, sem os efeitos originais acionados por tecla.
 
 Para compilar, instalar e carregar o LaunchAgent no Mac:
 
@@ -48,7 +52,7 @@ sh install.sh
 O instalador usa o `hidapi` do Homebrew, grava os arquivos em
 `~/Library/Application Support/headless-lights` e instala
 `~/Library/LaunchAgents/com.headless-lights.agent.plist`. O processo inicia em
-Stranger Things, reinicia se um dispositivo for reconectado e não expõe uma
+Borderlands 4, reinicia se um dispositivo for reconectado e não expõe uma
 porta na rede.
 
 O Scimitar precisa permanecer em modo software para aceitar RGB animado. Nesse

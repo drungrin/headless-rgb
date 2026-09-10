@@ -8,7 +8,7 @@
     <array>
         <string>__HOME__/Library/Application Support/headless-lights/bin/headless-lights-agent</string>
         <string>--effect</string>
-        <string>stranger-things</string>
+        <string>borderlands-4</string>
     </array>
     <key>RunAtLoad</key>
     <true/>

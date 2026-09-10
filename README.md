@@ -1,8 +1,8 @@
 # headless-lights
 
 Controlador RGB headless que sincroniza dispositivos ligados a este PC Linux e
-a um Mac na mesma rede. Há suporte a cores fixas, quadros por LED e ao efeito
-animado Watercolor Spectrum.
+a um Mac na mesma rede. Há suporte a cores fixas, quadros por LED e aos efeitos
+animados Watercolor Spectrum, Stranger Things e Borderlands 4.
 
 ## Hardware validado
 
@@ -128,6 +128,7 @@ headless-lights mac-status
 headless-lights mac-color 0000ff
 headless-lights mac-effect watercolor
 headless-lights mac-effect stranger-things
+headless-lights mac-effect borderlands-4
 ```
 
 `mac-color` aplica a cor ao K70 MAX, MM700, Scimitar e G560. Os botões laterais
@@ -149,7 +150,11 @@ O Stranger Things reproduz a parte ambiente do perfil oficial: fundo azul/roxo
 quase preto, ondas e chuva vermelhas e uma sequência de flashes a cada sete
 segundos. No Mac ele não reage às teclas.
 
-Os dois efeitos rodam a 12 FPS e usam o tempo Unix como relógio de fase comum
+Borderlands 4 adapta as camadas contínuas do perfil iCUE: base vermelha, onda
+laranja de cinco segundos e onda dourada de 7,3 segundos. Os efeitos originais
+acionados por tecla não se aplicam aos dispositivos headless.
+
+Os três efeitos rodam a 12 FPS e usam o tempo Unix como relógio de fase comum
 entre Linux e Mac.
 
 Escopos disponíveis no Linux:
@@ -171,6 +176,7 @@ headless-lights effect-preview watercolor --scope hub --seconds 20 --fps 12
 headless-lights effect-preview watercolor --scope local --seconds 20 --fps 12
 headless-lights effect-preview watercolor --scope pc --seconds 20 --fps 12
 headless-lights effect-preview stranger-things --scope pc --seconds 21 --fps 12
+headless-lights effect-preview borderlands-4 --scope pc --seconds 20 --fps 12
 ```
 
 Antes de executar um preview ou uma cor estática local enquanto um efeito
@@ -183,8 +189,9 @@ systemctl --user stop headless-lights-effect.service
 systemctl --user start headless-lights-effect.service
 ```
 
-No Mac, `mac-color` troca o agente para cor estática. Use `mac-effect watercolor`
-ou `mac-effect stranger-things` para voltar a uma animação.
+No Mac, `mac-color` troca o agente para cor estática. Use `mac-effect watercolor`,
+`mac-effect stranger-things` ou `mac-effect borderlands-4` para voltar a uma
+animação.
 
 Execução contínua em primeiro plano ou como serviço:
 
@@ -192,6 +199,7 @@ Execução contínua em primeiro plano ou como serviço:
 headless-lights effect-hold watercolor --scope pc --fps 12
 headless-lights effect-hold stranger-things --scope pc --fps 12
 headless-lights effect-service-install stranger-things --scope pc --fps 12
+headless-lights effect-service-install borderlands-4 --scope pc --fps 12
 ```
 
 O instalador grava e inicia `headless-lights-effect.service`. Executá-lo com

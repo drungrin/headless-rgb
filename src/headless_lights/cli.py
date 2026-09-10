@@ -80,7 +80,9 @@ def build_parser() -> argparse.ArgumentParser:
         "mac-effect",
         help="start an animated effect on the Mac agent",
     )
-    mac_effect.add_argument("effect", choices=("watercolor", "stranger-things"))
+    mac_effect.add_argument(
+        "effect", choices=("watercolor", "stranger-things", "borderlands-4")
+    )
     mac_effect.add_argument("--host", default=DEFAULT_MAC_HOST)
     mac_effect.add_argument("--ssh-timeout", type=float, default=10.0)
 
@@ -124,7 +126,9 @@ def build_parser() -> argparse.ArgumentParser:
         "effect-preview",
         help="run a temporary animated effect preview",
     )
-    effect_preview.add_argument("effect", choices=("watercolor", "stranger-things"))
+    effect_preview.add_argument(
+        "effect", choices=("watercolor", "stranger-things", "borderlands-4")
+    )
     effect_preview.add_argument(
         "--scope", choices=("hub", "local", "pc"), default="hub"
     )
@@ -135,7 +139,9 @@ def build_parser() -> argparse.ArgumentParser:
         "effect-hold",
         help="continuously render an animated effect",
     )
-    effect_hold.add_argument("effect", choices=("watercolor", "stranger-things"))
+    effect_hold.add_argument(
+        "effect", choices=("watercolor", "stranger-things", "borderlands-4")
+    )
     effect_hold.add_argument(
         "--scope", choices=("hub", "local", "pc"), default="hub"
     )
@@ -145,7 +151,9 @@ def build_parser() -> argparse.ArgumentParser:
         "effect-service-install",
         help="install and start a persistent animated effect",
     )
-    effect_install.add_argument("effect", choices=("watercolor", "stranger-things"))
+    effect_install.add_argument(
+        "effect", choices=("watercolor", "stranger-things", "borderlands-4")
+    )
     effect_install.add_argument(
         "--scope", choices=("hub", "local", "pc"), default="hub"
     )

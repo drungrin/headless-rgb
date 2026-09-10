@@ -294,7 +294,7 @@ def build_effect_user_unit(effect: str, *, scope: str, fps: int) -> str:
         raise ValueError("effect FPS must be between 1 and 30")
     if scope not in {"hub", "local", "pc"}:
         raise ValueError("effect scope must be hub, local or pc")
-    if effect not in {"watercolor", "stranger-things"}:
+    if effect not in {"watercolor", "stranger-things", "borderlands-4"}:
         raise ValueError("unknown effect")
     source_root = Path(__file__).resolve().parents[1]
     arguments = [

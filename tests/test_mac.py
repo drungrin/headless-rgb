@@ -77,6 +77,23 @@ class MacAgentTests(unittest.TestCase):
 
         self.assertIn("effect=stranger-things", response)
 
+    @patch("headless_lights.mac.subprocess.run")
+    def test_accepts_borderlands4_effect_response(self, run) -> None:
+        run.return_value = subprocess.CompletedProcess(
+            args=(),
+            returncode=0,
+            stdout=(
+                "OK effect=borderlands-4 "
+                "k70=ok mm700=ok g560=ok scimitar=ok\n"
+            ),
+            stderr="",
+        )
+
+        response = send_agent_command("EFFECT BORDERLANDS-4")
+
+        self.assertIn("effect=borderlands-4", response)
+        self.assertEqual(run.call_args.kwargs["input"], "EFFECT BORDERLANDS-4\n")
+
     def test_rejects_option_like_host(self) -> None:
         with self.assertRaises(ValueError):
             send_agent_command("STATUS", host="-oProxyCommand=bad")

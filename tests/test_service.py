@@ -172,6 +172,12 @@ class ServiceTests(unittest.TestCase):
         self.assertIn('"--scope" "local"', unit)
         self.assertIn('"--fps" "12"', unit)
 
+    def test_effect_unit_accepts_borderlands4(self) -> None:
+        unit = build_effect_user_unit("borderlands-4", scope="pc", fps=12)
+
+        self.assertIn('"effect-hold" "borderlands-4"', unit)
+        self.assertIn('"--scope" "pc"', unit)
+
     def test_install_effect_service_migrates_legacy_unit(self) -> None:
         with TemporaryDirectory() as temporary_home:
             with (

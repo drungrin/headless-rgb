@@ -37,6 +37,32 @@ STRANGER_FLASH_STOPS = (
 )
 
 
+def borderlands4_color(
+    position: float,
+    elapsed: float,
+    *,
+    lane: int = 0,
+) -> tuple[int, int, int]:
+    """Render the continuous red, orange and gold layers from Borderlands 4."""
+    red_pulse = 0.18 + 0.12 * (
+        1.0 + math.sin(2.0 * math.pi * (elapsed / 3.0 + lane * 0.11))
+    ) / 2.0
+    color = _mix_color((192, 0, 2), (255, 18, 0), red_pulse)
+
+    orange_wave = _circular_peak(
+        (position - elapsed / 5.0 + lane * 0.071) % 1.0,
+        0.36,
+        0.25,
+    )
+    gold_wave = _circular_peak(
+        (position - elapsed / 7.3 - lane * 0.043) % 1.0,
+        0.74,
+        0.17,
+    )
+    color = _screen_color(color, (255, 125, 0), orange_wave * 0.92)
+    return _screen_color(color, (250, 180, 0), gold_wave * 0.76)
+
+
 def _smooth_mix(left: int, right: int, amount: float) -> int:
     weight = (1.0 - math.cos(math.pi * amount)) / 2.0
     return round(left * (1.0 - weight) + right * weight)
@@ -228,6 +254,47 @@ def render_stranger_line(
     ]
 
 
+def render_borderlands4_fans(
+    fan_count: int,
+    *,
+    elapsed: float,
+) -> list[list[tuple[int, int, int]]]:
+    if fan_count <= 0:
+        raise ValueError("fan count must be positive")
+    return [
+        [
+            borderlands4_color(
+                fan * 0.19 + led / LX_LED_COUNT * 0.88,
+                elapsed,
+                lane=fan,
+            )
+            for led in range(LX_LED_COUNT)
+        ]
+        for fan in range(fan_count)
+    ]
+
+
+def render_borderlands4_line(
+    led_count: int,
+    *,
+    elapsed: float,
+    offset: float,
+    span: float,
+    lane: int,
+) -> list[tuple[int, int, int]]:
+    if led_count <= 0:
+        raise ValueError("LED count must be positive")
+    denominator = max(1, led_count - 1)
+    return [
+        borderlands4_color(
+            offset + span * led / denominator,
+            elapsed,
+            lane=lane,
+        )
+        for led in range(led_count)
+    ]
+
+
 def run_effect(
     effect: str,
     *,
@@ -240,7 +307,7 @@ def run_effect(
 
     if scope not in {"hub", "local", "pc"}:
         raise ValueError("effect scope must be hub, local or pc")
-    if effect not in {"watercolor", "stranger-things"}:
+    if effect not in {"watercolor", "stranger-things", "borderlands-4"}:
         raise ValueError("unknown effect")
     if not 1 <= fps <= 30:
         raise ValueError("effect FPS must be between 1 and 30")
@@ -319,66 +386,88 @@ def run_effect(
             if seconds is not None and runtime >= seconds:
                 return
             elapsed = time.time()
-            frame = (
-                render_watercolor_fans(len(zones), elapsed=elapsed)
-                if effect == "watercolor"
-                else render_stranger_fans(len(zones), elapsed=elapsed)
-            )
+            if effect == "watercolor":
+                frame = render_watercolor_fans(len(zones), elapsed=elapsed)
+            elif effect == "stranger-things":
+                frame = render_stranger_fans(len(zones), elapsed=elapsed)
+            else:
+                frame = render_borderlands4_fans(len(zones), elapsed=elapsed)
             for zone, colors in zip(zones, frame, strict=True):
                 zone.set_colors([RGBColor(*color) for color in colors], fast=True)
             for index, zone in enumerate(ram_zones):
-                colors = (
-                    render_watercolor_line(
+                if effect == "watercolor":
+                    colors = render_watercolor_line(
                         CORSAIR_RAM_LED_COUNT,
                         elapsed=elapsed,
                         offset=0.14 + index * 0.31,
                         span=0.56,
                     )
-                    if effect == "watercolor"
-                    else render_stranger_line(
+                elif effect == "stranger-things":
+                    colors = render_stranger_line(
                         CORSAIR_RAM_LED_COUNT,
                         elapsed=elapsed,
                         offset=0.14 + index * 0.31,
                         span=0.78,
                         lane=10 + index,
                     )
-                )
+                else:
+                    colors = render_borderlands4_line(
+                        CORSAIR_RAM_LED_COUNT,
+                        elapsed=elapsed,
+                        offset=0.14 + index * 0.31,
+                        span=0.78,
+                        lane=10 + index,
+                    )
                 zone.set_colors([RGBColor(*color) for color in colors], fast=True)
             if aura_zone is not None:
-                colors = (
-                    render_watercolor_line(
+                if effect == "watercolor":
+                    colors = render_watercolor_line(
                         AURA_LED_COUNT,
                         elapsed=elapsed,
                         offset=0.38,
                         span=1.08,
                     )
-                    if effect == "watercolor"
-                    else render_stranger_line(
+                elif effect == "stranger-things":
+                    colors = render_stranger_line(
                         AURA_LED_COUNT,
                         elapsed=elapsed,
                         offset=0.38,
                         span=1.2,
                         lane=12,
                     )
-                )
+                else:
+                    colors = render_borderlands4_line(
+                        AURA_LED_COUNT,
+                        elapsed=elapsed,
+                        offset=0.38,
+                        span=1.2,
+                        lane=12,
+                    )
                 aura_zone.set_colors([RGBColor(*color) for color in colors], fast=True)
             if beelight is not None:
-                colors = (
-                    render_watercolor_line(
+                if effect == "watercolor":
+                    colors = render_watercolor_line(
                         BEELIGHT_LED_COUNT,
                         elapsed=elapsed,
                         offset=0.67,
                         span=1.24,
                     )
-                    if effect == "watercolor"
-                    else render_stranger_line(
+                elif effect == "stranger-things":
+                    colors = render_stranger_line(
                         BEELIGHT_LED_COUNT,
                         elapsed=elapsed,
                         offset=0.67,
                         span=1.45,
                         lane=13,
                     )
-                )
+                else:
+                    colors = render_borderlands4_line(
+                        BEELIGHT_LED_COUNT,
+                        elapsed=elapsed,
+                        offset=0.67,
+                        span=1.45,
+                        lane=13,
+                    )
                 beelight.set_pixels(colors)
                 beelight.process_incoming()
             next_frame += 1.0 / fps

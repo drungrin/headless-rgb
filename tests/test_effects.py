@@ -3,6 +3,9 @@ from __future__ import annotations
 import unittest
 
 from headless_lights.effects import (
+    borderlands4_color,
+    render_borderlands4_fans,
+    render_borderlands4_line,
     render_watercolor_fans,
     render_watercolor_line,
     render_stranger_fans,
@@ -59,6 +62,24 @@ class WatercolorTests(unittest.TestCase):
 
         self.assertGreater(flash[0], quiet[0])
         self.assertGreater(flash[0], flash[2])
+
+    def test_borderlands4_frame_matches_lx_topology(self) -> None:
+        frame = render_borderlands4_fans(6, elapsed=1.5)
+
+        self.assertEqual(len(frame), 6)
+        self.assertTrue(all(len(fan) == 18 for fan in frame))
+
+    def test_borderlands4_has_moving_warm_layers(self) -> None:
+        first = borderlands4_color(0.37, 1.5, lane=2)
+        later = borderlands4_color(0.37, 4.0, lane=2)
+        line = render_borderlands4_line(
+            12, elapsed=1.5, offset=0.1, span=0.8, lane=4
+        )
+
+        self.assertTrue(all(0 <= component <= 255 for component in first))
+        self.assertGreater(first[0], first[2])
+        self.assertNotEqual(first, later)
+        self.assertNotEqual(line[0], line[-1])
 
 
 if __name__ == "__main__":
