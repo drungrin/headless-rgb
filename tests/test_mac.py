@@ -13,7 +13,7 @@ class MacAgentTests(unittest.TestCase):
         run.return_value = subprocess.CompletedProcess(
             args=(),
             returncode=0,
-            stdout="OK color=0000ff icue=ok g560=ok scimitar=ok\n",
+            stdout="OK color=0000ff k70=ok mm700=ok g560=ok scimitar=ok\n",
             stderr="",
         )
 
@@ -25,7 +25,7 @@ class MacAgentTests(unittest.TestCase):
 
         self.assertEqual(
             response,
-            "OK color=0000ff icue=ok g560=ok scimitar=ok",
+            "OK color=0000ff k70=ok mm700=ok g560=ok scimitar=ok",
         )
         self.assertEqual(run.call_args.kwargs["input"], "COLOR 0000ff\n")
         self.assertEqual(run.call_args.kwargs["timeout"], 7)
@@ -52,7 +52,7 @@ class MacAgentTests(unittest.TestCase):
         run.return_value = subprocess.CompletedProcess(
             args=(),
             returncode=0,
-            stdout="OK effect=watercolor icue=ok g560=ok scimitar=ok\n",
+            stdout="OK effect=watercolor k70=ok mm700=ok g560=ok scimitar=ok\n",
             stderr="",
         )
 
@@ -66,7 +66,10 @@ class MacAgentTests(unittest.TestCase):
         run.return_value = subprocess.CompletedProcess(
             args=(),
             returncode=0,
-            stdout="OK effect=stranger-things icue=ok g560=ok scimitar=ok\n",
+            stdout=(
+                "OK effect=stranger-things "
+                "k70=ok mm700=ok g560=ok scimitar=ok\n"
+            ),
             stderr="",
         )
 

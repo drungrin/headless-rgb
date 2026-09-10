@@ -9,7 +9,6 @@
         <string>__HOME__/Library/Application Support/headless-lights/bin/headless-lights-agent</string>
         <string>--effect</string>
         <string>stranger-things</string>
-        <string>--include-mm700</string>
     </array>
     <key>RunAtLoad</key>
     <true/>

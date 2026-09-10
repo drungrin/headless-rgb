@@ -2,13 +2,13 @@
 
 Ferramentas do agente que aplica no Mac cores fixas e efeitos definidos pelo PC.
 
-`icue_probe.cpp` usa o SDK oficial da Corsair para validar conexão com o iCUE e
-enumerar dispositivos/LEDs. Sem argumentos ele é somente leitura. Com
-`--color RRGGBB`, aplica uma camada compartilhada por oito segundos; não altera
-perfis, teclas ou macros.
+`icue_probe.cpp` permanece apenas como diagnóstico histórico do SDK. O agente de
+produção não carrega o iCUE nem redistribui seu framework.
 
-O SDK não é redistribuído neste repositório. Os headers e a biblioteca devem vir
-do DMG oficial `iCUESDK_4.0.84.dmg`.
+`k70max_probe.cpp`, `k70max_layout.h` e `mm700_probe.cpp` validam os backends HID
+diretos. O protocolo e o mapa físico derivam respectivamente das implementações
+K70 MAX e MM700 do OpenLinkHub; esses arquivos e `agent.cpp` são distribuídos
+sob GPL-3.0-or-later.
 
 `g560_probe.cpp` enumera a interface Lightsync do Logitech G560. Com
 `--color RRGGBB`, aplica a mesma cor às quatro zonas usando o protocolo HID
@@ -23,11 +23,14 @@ argumentos ele apenas enumera; com
 `--color RRGGBB`, usa somente modo de software, endpoint RGB e escrita de cor.
 O formato vem do OpenLinkHub e o arquivo é GPL-3.0-or-later.
 
-`agent.cpp` reúne os três backends validados e escuta somente em
+`scimitar_input_probe.cpp` documenta o bitmask dos 12 botões laterais recebido
+pela interface 2 do Slipstream. O agente converte esses bits em `1` até `=` via
+CoreGraphics, sem observar as teclas do K70.
+
+`agent.cpp` reúne quatro backends HID diretos e escuta somente em
 `127.0.0.1:7531`. O PC envia `COLOR RRGGBB`, `EFFECT WATERCOLOR`,
 `EFFECT STRANGER-THINGS` ou `STATUS` através de uma sessão SSH. Por padrão o
-binário controla K70 MAX, Scimitar e G560; a instalação usa `--include-mm700`
-para incluir explicitamente o mousepad.
+binário controla K70 MAX, MM700, Scimitar e G560.
 
 `--effect watercolor` executa localmente o mesmo renderer temporal usado no PC,
 com gradiente por tecla no K70 e amostras independentes por zona no MM700, G560
@@ -39,11 +42,22 @@ captura de teclas ou camadas reativas.
 Para compilar, instalar e carregar o LaunchAgent no Mac:
 
 ```sh
-sh install.sh /caminho/para/iCUESDK.framework
+sh install.sh
 ```
 
 O instalador usa o `hidapi` do Homebrew, grava os arquivos em
 `~/Library/Application Support/headless-lights` e instala
 `~/Library/LaunchAgents/com.headless-lights.agent.plist`. O processo inicia em
-Stranger Things, inclui explicitamente o MM700, reinicia se o iCUE ainda não
-estiver disponível e não expõe uma porta na rede.
+Stranger Things, reinicia se um dispositivo for reconectado e não expõe uma
+porta na rede.
+
+O Scimitar precisa permanecer em modo software para aceitar RGB animado. Nesse
+modo, o agente lê o bitmask dos botões laterais pela interface vendor Slipstream
+e publica `1` até `=` via CoreGraphics. Conceda Acessibilidade somente ao
+executável final:
+
+```text
+~/Library/Application Support/headless-lights/bin/headless-lights-agent
+```
+
+Não conceda Acessibilidade a `sshd-keygen-wrapper`.

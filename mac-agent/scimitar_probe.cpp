@@ -67,11 +67,11 @@ bool transfer(
     return hid_read_timeout(device, response.data(), response.size(), 500) >= 0;
 }
 
-bool set_color(hid_device* device, Color color) {
+bool set_color(hid_device* device, Color color, bool software) {
     constexpr std::array<unsigned char, 4> software_mode{0x01, 0x03, 0x00, 0x02};
     constexpr std::array<unsigned char, 3> open_endpoint{0x0d, 0x00, 0x01};
     constexpr std::array<unsigned char, 2> write_color{0x06, 0x00};
-    if (!transfer(device, software_mode.data(), software_mode.size()) ||
+    if ((software && !transfer(device, software_mode.data(), software_mode.size())) ||
         !transfer(device, open_endpoint.data(), open_endpoint.size())) {
         return false;
     }
@@ -96,8 +96,15 @@ bool set_color(hid_device* device, Color color) {
 int main(int argc, char** argv) {
     Color color{};
     const bool apply = argc == 3 && std::string(argv[1]) == "--color";
-    if (argc != 1 && (!apply || !parse_color(argv[2], color))) {
-        std::cerr << "usage: scimitar-probe [--color RRGGBB]" << std::endl;
+    const bool hardware_color =
+        argc == 3 && std::string(argv[1]) == "--hardware-color";
+    const bool hardware_only = argc == 2 && std::string(argv[1]) == "--hardware";
+    if (argc != 1 && !hardware_only &&
+        (!(apply || hardware_color) || !parse_color(argv[2], color))) {
+        std::cerr
+            << "usage: scimitar-probe "
+               "[--color RRGGBB | --hardware-color RRGGBB | --hardware]"
+            << std::endl;
         return 64;
     }
 
@@ -122,7 +129,7 @@ int main(int argc, char** argv) {
         hid_exit();
         return 2;
     }
-    if (!apply) {
+    if (!apply && !hardware_color && !hardware_only) {
         std::cout << "selected=" << selected_path << std::endl;
         hid_exit();
         return 0;
@@ -134,11 +141,28 @@ int main(int argc, char** argv) {
         hid_exit();
         return 3;
     }
-    const bool success = set_color(device, color);
+    constexpr std::array<unsigned char, 4> hardware_mode{0x01, 0x03, 0x00, 0x01};
+    if (hardware_only) {
+        const bool success = transfer(
+            device,
+            hardware_mode.data(),
+            hardware_mode.size());
+        hid_close(device);
+        hid_exit();
+        return success ? 0 : 4;
+    }
+    if (hardware_color &&
+        !transfer(device, hardware_mode.data(), hardware_mode.size())) {
+        hid_close(device);
+        hid_exit();
+        return 4;
+    }
+    const bool success = set_color(device, color, apply);
     if (success) {
         std::cout << "color-set=" << argv[2] << " holding=8s" << std::endl;
         std::this_thread::sleep_for(std::chrono::seconds(8));
     }
+    transfer(device, hardware_mode.data(), hardware_mode.size());
     hid_close(device);
     hid_exit();
     return success ? 0 : 4;

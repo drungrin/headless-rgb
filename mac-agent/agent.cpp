@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// G560 framing derives from OpenRGB; Scimitar framing derives from OpenLinkHub.
+// G560 framing derives from OpenRGB. Corsair direct framing and the K70 MAX
+// layout derive from OpenLinkHub. See mac-agent/README.md for attribution.
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+#include <ApplicationServices/ApplicationServices.h>
 
 #include <array>
 #include <algorithm>
@@ -14,6 +17,7 @@
 #include <chrono>
 #include <cmath>
 #include <csignal>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -25,13 +29,16 @@
 
 #include <hidapi/hidapi.h>
 #include <hidapi/hidapi_darwin.h>
-#include <iCUESDK.h>
+
+#include "k70max_layout.h"
 
 namespace {
 
 constexpr unsigned short kLogitechVendor = 0x046d;
 constexpr unsigned short kG560Product = 0x0a78;
 constexpr unsigned short kCorsairVendor = 0x1b1c;
+constexpr unsigned short kK70MaxProduct = 0x1bc0;
+constexpr unsigned short kMM700Product = 0x1b9b;
 constexpr unsigned short kSlipstreamProduct = 0x2b00;
 constexpr unsigned short kLightsyncUsagePage = 0xff43;
 constexpr unsigned short kG560Usage = 0x0202;
@@ -40,7 +47,6 @@ constexpr unsigned char kScimitarEndpoint = 0x09;
 constexpr int kListenPort = 7531;
 
 std::atomic<bool> running{true};
-std::atomic<int> icue_session_state{CSS_Closed};
 
 struct Color {
     unsigned char red;
@@ -259,250 +265,290 @@ void stop_handler(int) {
     running.store(false);
 }
 
-void icue_state_changed(void*, const CorsairSessionStateChanged* event) {
-    if (event == nullptr) {
-        return;
-    }
-    icue_session_state.store(event->state);
-    std::cout << "icue-state=" << event->state
-              << " server=" << event->details.serverVersion.major << "."
-              << event->details.serverVersion.minor << "."
-              << event->details.serverVersion.patch
-              << " host=" << event->details.serverHostVersion.major << "."
-              << event->details.serverHostVersion.minor << "."
-              << event->details.serverHostVersion.patch << std::endl;
-}
-
-class ICueBackend {
+class K70Backend {
 public:
-    explicit ICueBackend(bool include_mousemat)
-        : include_mousemat_(include_mousemat) {}
-
-    bool connect() {
-        if (CorsairConnect(icue_state_changed, nullptr) != CE_Success) {
-            return false;
-        }
-        const auto deadline = std::chrono::steady_clock::now() +
-                              std::chrono::seconds(15);
-        while (icue_session_state.load() != CSS_Connected &&
-               std::chrono::steady_clock::now() < deadline) {
-            const int state = icue_session_state.load();
-            if (state == CSS_ConnectionRefused || state == CSS_ConnectionLost) {
-                return false;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-        if (icue_session_state.load() != CSS_Connected) {
-            return false;
-        }
-        CorsairSetLayerPriority(255);
-        return enumerate_devices();
-    }
-
-    ~ICueBackend() {
-        CorsairDisconnect();
-    }
-
-    bool connected() const {
-        return icue_session_state.load() == CSS_Connected;
+    ~K70Backend() {
+        reset(true);
     }
 
     bool set_color(Color color) {
-        if (!connected() && !connect()) {
-            return false;
-        }
-        bool success = true;
-        for (const Device& device : devices_) {
-            std::vector<Color> frame(device.leds.size(), color);
-            success = write_frame(device, frame, true) && success;
-        }
-        return success;
+        std::array<Color, kK70LedCoordinates.size()> frame{};
+        frame.fill(color);
+        return set_frame(frame);
     }
 
     bool set_watercolor(double elapsed) {
-        bool success = true;
-        for (const Device& device : devices_) {
-            if (device.leds.empty()) {
-                success = false;
-                continue;
+        std::array<Color, kK70LedCoordinates.size()> frame{};
+        for (std::size_t index = 0; index < frame.size(); ++index) {
+            const K70LedCoordinate coordinate = kK70LedCoordinates[index];
+            if (coordinate.mapped) {
+                frame[index] = watercolor_color(
+                    0.12 + coordinate.x * 1.05 + coordinate.y * 0.18,
+                    elapsed);
             }
-            std::vector<Color> frame;
-            frame.reserve(device.leds.size());
-            if (device.info.type == CDT_Keyboard) {
-                const auto minmax_x = std::minmax_element(
-                    device.leds.begin(),
-                    device.leds.end(),
-                    [](const CorsairLedPosition& left,
-                       const CorsairLedPosition& right) {
-                        return left.cx < right.cx;
-                    });
-                const auto minmax_y = std::minmax_element(
-                    device.leds.begin(),
-                    device.leds.end(),
-                    [](const CorsairLedPosition& left,
-                       const CorsairLedPosition& right) {
-                        return left.cy < right.cy;
-                    });
-                const double x_range =
-                    std::max(1.0, minmax_x.second->cx - minmax_x.first->cx);
-                const double y_range =
-                    std::max(1.0, minmax_y.second->cy - minmax_y.first->cy);
-                for (const CorsairLedPosition& led : device.leds) {
-                    const double x = (led.cx - minmax_x.first->cx) / x_range;
-                    const double y = (led.cy - minmax_y.first->cy) / y_range;
-                    frame.push_back(
-                        watercolor_color(0.12 + x * 1.05 + y * 0.18, elapsed));
-                }
-            } else {
-                const double denominator =
-                    std::max<std::size_t>(1, device.leds.size() - 1);
-                for (std::size_t index = 0; index < device.leds.size(); ++index) {
-                    frame.push_back(watercolor_color(
-                        0.54 + 0.68 * index / denominator,
-                        elapsed));
-                }
-            }
-            success = write_frame(device, frame, false) && success;
         }
-        return success;
+        return set_frame(frame);
     }
 
     bool set_stranger(double elapsed) {
-        bool success = true;
-        for (const Device& device : devices_) {
-            if (device.leds.empty()) {
-                success = false;
-                continue;
+        std::array<Color, kK70LedCoordinates.size()> frame{};
+        for (std::size_t index = 0; index < frame.size(); ++index) {
+            const K70LedCoordinate coordinate = kK70LedCoordinates[index];
+            if (coordinate.mapped) {
+                frame[index] = stranger_things_color(
+                    0.11 + coordinate.x * 1.28 + coordinate.y * 0.2,
+                    elapsed,
+                    static_cast<int>(std::lround(coordinate.y * 5.0)));
             }
-            std::vector<Color> frame;
-            frame.reserve(device.leds.size());
-            if (device.info.type == CDT_Keyboard) {
-                const auto minmax_x = std::minmax_element(
-                    device.leds.begin(),
-                    device.leds.end(),
-                    [](const CorsairLedPosition& left,
-                       const CorsairLedPosition& right) {
-                        return left.cx < right.cx;
-                    });
-                const auto minmax_y = std::minmax_element(
-                    device.leds.begin(),
-                    device.leds.end(),
-                    [](const CorsairLedPosition& left,
-                       const CorsairLedPosition& right) {
-                        return left.cy < right.cy;
-                    });
-                const double x_range =
-                    std::max(1.0, minmax_x.second->cx - minmax_x.first->cx);
-                const double y_range =
-                    std::max(1.0, minmax_y.second->cy - minmax_y.first->cy);
-                for (const CorsairLedPosition& led : device.leds) {
-                    const double x = (led.cx - minmax_x.first->cx) / x_range;
-                    const double y = (led.cy - minmax_y.first->cy) / y_range;
-                    frame.push_back(stranger_things_color(
-                        0.11 + x * 1.28 + y * 0.2,
-                        elapsed,
-                        static_cast<int>(std::lround(y * 5.0))));
-                }
-            } else {
-                const double denominator =
-                    std::max<std::size_t>(1, device.leds.size() - 1);
-                for (std::size_t index = 0; index < device.leds.size(); ++index) {
-                    frame.push_back(stranger_things_color(
-                        0.57 + 0.82 * index / denominator,
-                        elapsed,
-                        8));
-                }
-            }
-            success = write_frame(device, frame, false) && success;
         }
-        return success;
-    }
-
-    std::size_t device_count() const {
-        return devices_.size();
+        return set_frame(frame);
     }
 
 private:
-    struct Device {
-        CorsairDeviceInfo info{};
-        std::vector<CorsairLedPosition> leds;
-    };
-
-    bool write_frame(
-        const Device& device,
-        const std::vector<Color>& frame,
-        bool log_result) {
-        if (frame.size() != device.leds.size()) {
+    bool open() {
+        hid_device_info* devices = hid_enumerate(kCorsairVendor, kK70MaxProduct);
+        std::string path;
+        for (hid_device_info* info = devices; info != nullptr; info = info->next) {
+            if (info->interface_number == 1) {
+                path = info->path;
+                break;
+            }
+        }
+        hid_free_enumeration(devices);
+        if (path.empty()) {
             return false;
         }
-        std::vector<CorsairLedColor> colors;
-        colors.reserve(device.leds.size());
-        for (std::size_t index = 0; index < device.leds.size(); ++index) {
-            const CorsairLedPosition& led = device.leds[index];
-            const Color color = frame[index];
-            colors.push_back({
-                led.id,
-                color.red,
-                color.green,
-                color.blue,
-                255,
-            });
-        }
-        const CorsairError error = CorsairSetLedColors(
-            device.info.id,
-            static_cast<int>(colors.size()),
-            colors.data());
-        if (log_result) {
-            std::cout << "icue-color model=" << device.info.model
-                      << " leds=" << colors.size() << " error=" << error
-                      << std::endl;
-        }
-        return error == CE_Success;
+        device_ = hid_open_path(path.c_str());
+        return device_ != nullptr;
     }
 
-    bool enumerate_devices() {
-        CorsairDeviceFilter filter{};
-        filter.deviceTypeMask = CDT_Keyboard | CDT_Mousemat;
-        CorsairDeviceInfo found[CORSAIR_DEVICE_COUNT_MAX]{};
-        int count = 0;
-        if (CorsairGetDevices(
-                &filter,
-                static_cast<int>(CORSAIR_DEVICE_COUNT_MAX),
-                found,
-                &count) != CE_Success) {
+    bool prepare() {
+        if (device_ == nullptr && !open()) {
             return false;
         }
-
-        devices_.clear();
-        for (int index = 0; index < count; ++index) {
-            const bool is_k70 = found[index].type == CDT_Keyboard &&
-                                std::string(found[index].model) == "K70 MAX";
-            const bool is_mousemat = include_mousemat_ &&
-                                     found[index].type == CDT_Mousemat;
-            if (!is_k70 && !is_mousemat) {
-                continue;
-            }
-            Device device;
-            device.info = found[index];
-            device.leds.resize(CORSAIR_DEVICE_LEDCOUNT_MAX);
-            int led_count = 0;
-            if (CorsairGetLedPositions(
-                    device.info.id,
-                    static_cast<int>(device.leds.size()),
-                    device.leds.data(),
-                    &led_count) != CE_Success) {
-                continue;
-            }
-            device.leds.resize(static_cast<std::size_t>(led_count));
-            std::cout << "icue-device model=" << device.info.model
-                      << " leds=" << device.leds.size() << std::endl;
-            devices_.push_back(std::move(device));
+        if (prepared_) {
+            return true;
         }
-        return !devices_.empty();
+        constexpr std::array<unsigned char, 4> software{0x01, 0x03, 0x00, 0x02};
+        constexpr std::array<unsigned char, 3> activate_keys{0x0d, 0x01, 0x22};
+        constexpr std::array<unsigned char, 3> activate_bar{0x0d, 0x00, 0x2e};
+        prepared_ = transfer(software.data(), software.size()) &&
+                    transfer(activate_keys.data(), activate_keys.size()) &&
+                    transfer(activate_bar.data(), activate_bar.size());
+        return prepared_;
     }
 
-    bool include_mousemat_;
-    std::vector<Device> devices_;
+    bool set_frame(const std::array<Color, 142>& frame) {
+        if (!prepare()) {
+            reset(false);
+            return false;
+        }
+        std::array<unsigned char, 428> color_data{};
+        for (std::size_t channel = 0; channel < frame.size(); ++channel) {
+            color_data[channel * 3] = frame[channel].red;
+            color_data[channel * 3 + 1] = frame[channel].green;
+            color_data[channel * 3 + 2] = frame[channel].blue;
+        }
+        std::array<unsigned char, 434> packet{};
+        packet[0] = 0xac;
+        packet[1] = 0x01;
+        packet[4] = 0x12;
+        std::memcpy(packet.data() + 6, color_data.data(), color_data.size());
+        constexpr std::array<unsigned char, 2> first{0x06, 0x01};
+        constexpr std::array<unsigned char, 2> next{0x07, 0x01};
+        for (std::size_t offset = 0; offset < packet.size(); offset += 125) {
+            const std::size_t size = std::min<std::size_t>(125, packet.size() - offset);
+            const auto& endpoint = offset == 0 ? first : next;
+            if (!transfer(
+                    endpoint.data(),
+                    endpoint.size(),
+                    packet.data() + offset,
+                    size)) {
+                reset(false);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool transfer(
+        const unsigned char* endpoint,
+        std::size_t endpoint_size,
+        const unsigned char* payload = nullptr,
+        std::size_t payload_size = 0) {
+        if (device_ == nullptr || 2 + endpoint_size + payload_size > 129) {
+            return false;
+        }
+        std::array<unsigned char, 129> output{};
+        output[1] = 0x08;
+        std::memcpy(output.data() + 2, endpoint, endpoint_size);
+        if (payload != nullptr && payload_size > 0) {
+            std::memcpy(output.data() + 2 + endpoint_size, payload, payload_size);
+        }
+        if (hid_write(device_, output.data(), output.size()) < 0) {
+            return false;
+        }
+        std::array<unsigned char, 128> response{};
+        return hid_read_timeout(device_, response.data(), response.size(), 500) >= 0;
+    }
+
+    void reset(bool restore_hardware) {
+        if (device_ == nullptr) {
+            return;
+        }
+        if (restore_hardware && prepared_) {
+            constexpr std::array<unsigned char, 4> hardware{0x01, 0x03, 0x00, 0x01};
+            transfer(hardware.data(), hardware.size());
+        }
+        hid_close(device_);
+        device_ = nullptr;
+        prepared_ = false;
+    }
+
+    hid_device* device_ = nullptr;
+    bool prepared_ = false;
+};
+
+class MM700Backend {
+public:
+    ~MM700Backend() {
+        reset(true);
+    }
+
+    bool set_color(Color color) {
+        return set_colors({color, color, color});
+    }
+
+    bool set_watercolor(double elapsed) {
+        std::array<Color, 3> colors{};
+        for (std::size_t zone = 0; zone < colors.size(); ++zone) {
+            colors[zone] = watercolor_color(0.54 + zone * 0.34, elapsed);
+        }
+        return set_colors(colors);
+    }
+
+    bool set_stranger(double elapsed) {
+        std::array<Color, 3> colors{};
+        for (std::size_t zone = 0; zone < colors.size(); ++zone) {
+            colors[zone] = stranger_things_color(
+                0.57 + zone * 0.41,
+                elapsed,
+                8 + static_cast<int>(zone));
+        }
+        return set_colors(colors);
+    }
+
+    bool heartbeat_if_due() {
+        if (device_ == nullptr || !prepared_) {
+            return true;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_heartbeat_ < std::chrono::seconds(20)) {
+            return true;
+        }
+        constexpr std::array<unsigned char, 1> heartbeat{0x12};
+        last_heartbeat_ = now;
+        if (!transfer(heartbeat.data(), heartbeat.size())) {
+            reset(false);
+            return false;
+        }
+        return true;
+    }
+
+private:
+    bool open() {
+        hid_device_info* devices = hid_enumerate(kCorsairVendor, kMM700Product);
+        std::string path;
+        for (hid_device_info* info = devices; info != nullptr; info = info->next) {
+            if (info->interface_number == 1) {
+                path = info->path;
+                break;
+            }
+        }
+        hid_free_enumeration(devices);
+        if (path.empty()) {
+            return false;
+        }
+        device_ = hid_open_path(path.c_str());
+        return device_ != nullptr;
+    }
+
+    bool prepare() {
+        if (device_ == nullptr && !open()) {
+            return false;
+        }
+        if (prepared_) {
+            return true;
+        }
+        constexpr std::array<unsigned char, 4> software{0x01, 0x03, 0x00, 0x02};
+        constexpr std::array<unsigned char, 3> activate{0x0d, 0x00, 0x01};
+        prepared_ = transfer(software.data(), software.size()) &&
+                    transfer(activate.data(), activate.size());
+        last_heartbeat_ = std::chrono::steady_clock::now();
+        return prepared_;
+    }
+
+    bool set_colors(const std::array<Color, 3>& colors) {
+        if (!prepare()) {
+            reset(false);
+            return false;
+        }
+        constexpr std::array<unsigned char, 2> write_color{0x06, 0x00};
+        std::array<unsigned char, 20> payload{};
+        payload[0] = 9;
+        for (std::size_t zone = 0; zone < colors.size(); ++zone) {
+            payload[4 + zone] = colors[zone].red;
+            payload[7 + zone] = colors[zone].green;
+            payload[10 + zone] = colors[zone].blue;
+        }
+        if (!transfer(
+                write_color.data(),
+                write_color.size(),
+                payload.data(),
+                payload.size())) {
+            reset(false);
+            return false;
+        }
+        return true;
+    }
+
+    bool transfer(
+        const unsigned char* endpoint,
+        std::size_t endpoint_size,
+        const unsigned char* payload = nullptr,
+        std::size_t payload_size = 0) {
+        if (device_ == nullptr || 2 + endpoint_size + payload_size > 65) {
+            return false;
+        }
+        std::array<unsigned char, 65> output{};
+        output[1] = 0x08;
+        std::memcpy(output.data() + 2, endpoint, endpoint_size);
+        if (payload != nullptr && payload_size > 0) {
+            std::memcpy(output.data() + 2 + endpoint_size, payload, payload_size);
+        }
+        if (hid_write(device_, output.data(), output.size()) < 0) {
+            return false;
+        }
+        std::array<unsigned char, 64> response{};
+        return hid_read_timeout(device_, response.data(), response.size(), 500) >= 0;
+    }
+
+    void reset(bool restore_hardware) {
+        if (device_ == nullptr) {
+            return;
+        }
+        if (restore_hardware && prepared_) {
+            constexpr std::array<unsigned char, 4> hardware{0x01, 0x03, 0x00, 0x01};
+            transfer(hardware.data(), hardware.size());
+        }
+        hid_close(device_);
+        device_ = nullptr;
+        prepared_ = false;
+    }
+
+    hid_device* device_ = nullptr;
+    bool prepared_ = false;
+    std::chrono::steady_clock::time_point last_heartbeat_{};
 };
 
 class G560Backend {
@@ -590,8 +636,107 @@ private:
     std::array<bool, 4> prepared_{};
 };
 
+class ScimitarInputMapper {
+public:
+    ~ScimitarInputMapper() {
+        release_all();
+        if (listener_ != nullptr) {
+            hid_close(listener_);
+        }
+    }
+
+    bool initialize() {
+        if (!AXIsProcessTrusted()) {
+            return false;
+        }
+        hid_device_info* devices =
+            hid_enumerate(kCorsairVendor, kSlipstreamProduct);
+        std::string path;
+        for (hid_device_info* info = devices; info != nullptr; info = info->next) {
+            if (info->interface_number == 2) {
+                path = info->path;
+                break;
+            }
+        }
+        hid_free_enumeration(devices);
+        if (path.empty()) {
+            return false;
+        }
+        listener_ = hid_open_path(path.c_str());
+        return listener_ != nullptr && hid_set_nonblocking(listener_, 1) == 0;
+    }
+
+    bool ready() const {
+        return listener_ != nullptr;
+    }
+
+    bool poll() {
+        if (listener_ == nullptr) {
+            return false;
+        }
+        while (true) {
+            std::array<unsigned char, 64> data{};
+            const int count = hid_read(listener_, data.data(), data.size());
+            if (count < 0) {
+                release_all();
+                hid_close(listener_);
+                listener_ = nullptr;
+                return false;
+            }
+            if (count == 0) {
+                return true;
+            }
+            if (count < 6 || (data[0] != 1 && data[0] != 2) ||
+                (data[1] != 0x02 && data[1] != 0x05 && data[1] != 0x09)) {
+                continue;
+            }
+            const std::uint32_t report_mask =
+                static_cast<std::uint32_t>(data[2]) |
+                (static_cast<std::uint32_t>(data[3]) << 8) |
+                (static_cast<std::uint32_t>(data[4]) << 16) |
+                (static_cast<std::uint32_t>(data[5]) << 24);
+            update(report_mask & kSideButtonMask);
+        }
+    }
+
+private:
+    static constexpr std::uint32_t kSideButtonMask = 0x0001ffe0;
+    static constexpr std::array<CGKeyCode, 12> kKeyCodes{
+        18, 19, 20, 21, 23, 22, 26, 28, 25, 29, 27, 24,
+    };
+
+    static void post(CGKeyCode key, bool pressed) {
+        CGEventRef event = CGEventCreateKeyboardEvent(nullptr, key, pressed);
+        if (event != nullptr) {
+            CGEventPost(kCGHIDEventTap, event);
+            CFRelease(event);
+        }
+    }
+
+    void update(std::uint32_t next_mask) {
+        const std::uint32_t changed = current_mask_ ^ next_mask;
+        for (std::size_t index = 0; index < kKeyCodes.size(); ++index) {
+            const std::uint32_t bit = static_cast<std::uint32_t>(1) << (index + 5);
+            if ((changed & bit) != 0) {
+                post(kKeyCodes[index], (next_mask & bit) != 0);
+            }
+        }
+        current_mask_ = next_mask;
+    }
+
+    void release_all() {
+        update(0);
+    }
+
+    hid_device* listener_ = nullptr;
+    std::uint32_t current_mask_ = 0;
+};
+
 class ScimitarBackend {
 public:
+    explicit ScimitarBackend(bool allow_software)
+        : allow_software_(allow_software) {}
+
     bool open() {
         hid_device_info* devices =
             hid_enumerate(kCorsairVendor, kSlipstreamProduct);
@@ -612,6 +757,11 @@ public:
 
     ~ScimitarBackend() {
         if (device_ != nullptr) {
+            if (prepared_) {
+                constexpr std::array<unsigned char, 4> hardware{
+                    0x01, 0x03, 0x00, 0x01};
+                transfer(hardware.data(), hardware.size());
+            }
             hid_close(device_);
         }
     }
@@ -621,6 +771,9 @@ public:
     }
 
     bool set_colors(const std::array<Color, 3>& colors) {
+        if (!allow_software_) {
+            return false;
+        }
         if (device_ == nullptr && !open()) {
             return false;
         }
@@ -651,7 +804,7 @@ public:
 
     bool heartbeat_if_due() {
         if (device_ == nullptr) {
-            return false;
+            return true;
         }
         const auto now = std::chrono::steady_clock::now();
         if (now - last_heartbeat_ < std::chrono::seconds(10)) {
@@ -685,12 +838,14 @@ private:
     }
 
     hid_device* device_ = nullptr;
+    bool allow_software_;
     bool prepared_ = false;
     std::chrono::steady_clock::time_point last_heartbeat_{};
 };
 
 struct ApplyResult {
-    bool icue;
+    bool k70;
+    bool mm700;
     bool g560;
     bool scimitar;
 };
@@ -702,19 +857,22 @@ enum class AgentEffect {
 };
 
 ApplyResult apply_color(
-    ICueBackend& icue,
+    K70Backend& k70,
+    MM700Backend& mm700,
     G560Backend& g560,
     ScimitarBackend& scimitar,
     Color color) {
     return {
-        icue.set_color(color),
+        k70.set_color(color),
+        mm700.set_color(color),
         g560.set_color(color),
         scimitar.set_color(color),
     };
 }
 
 ApplyResult apply_watercolor(
-    ICueBackend& icue,
+    K70Backend& k70,
+    MM700Backend& mm700,
     G560Backend& g560,
     ScimitarBackend& scimitar,
     double elapsed) {
@@ -727,14 +885,16 @@ ApplyResult apply_watercolor(
         scimitar_colors[zone] = watercolor_color(0.49 + zone * 0.24, elapsed);
     }
     return {
-        icue.set_watercolor(elapsed),
+        k70.set_watercolor(elapsed),
+        mm700.set_watercolor(elapsed),
         g560.set_colors(g560_colors),
         scimitar.set_colors(scimitar_colors),
     };
 }
 
 ApplyResult apply_stranger(
-    ICueBackend& icue,
+    K70Backend& k70,
+    MM700Backend& mm700,
     G560Backend& g560,
     ScimitarBackend& scimitar,
     double elapsed) {
@@ -753,7 +913,8 @@ ApplyResult apply_stranger(
             24 + static_cast<int>(zone));
     }
     return {
-        icue.set_stranger(elapsed),
+        k70.set_stranger(elapsed),
+        mm700.set_stranger(elapsed),
         g560.set_colors(g560_colors),
         scimitar.set_colors(scimitar_colors),
     };
@@ -773,21 +934,25 @@ const char* effect_name(AgentEffect effect) {
 
 ApplyResult apply_effect(
     AgentEffect effect,
-    ICueBackend& icue,
+    K70Backend& k70,
+    MM700Backend& mm700,
     G560Backend& g560,
     ScimitarBackend& scimitar,
     double elapsed) {
     if (effect == AgentEffect::Watercolor) {
-        return apply_watercolor(icue, g560, scimitar, elapsed);
+        return apply_watercolor(k70, mm700, g560, scimitar, elapsed);
     }
-    return apply_stranger(icue, g560, scimitar, elapsed);
+    return apply_stranger(k70, mm700, g560, scimitar, elapsed);
 }
 
 std::string result_line(Color color, ApplyResult result) {
     std::ostringstream output;
-    output << (result.icue && result.g560 && result.scimitar ? "OK" : "PARTIAL")
+    output << (result.k70 && result.mm700 && result.g560 && result.scimitar
+                   ? "OK"
+                   : "PARTIAL")
            << " color=" << color.hex()
-           << " icue=" << (result.icue ? "ok" : "error")
+           << " k70=" << (result.k70 ? "ok" : "error")
+           << " mm700=" << (result.mm700 ? "ok" : "error")
            << " g560=" << (result.g560 ? "ok" : "error")
            << " scimitar=" << (result.scimitar ? "ok" : "error") << "\n";
     return output.str();
@@ -795,9 +960,12 @@ std::string result_line(Color color, ApplyResult result) {
 
 std::string effect_result_line(const std::string& effect, ApplyResult result) {
     std::ostringstream output;
-    output << (result.icue && result.g560 && result.scimitar ? "OK" : "PARTIAL")
+    output << (result.k70 && result.mm700 && result.g560 && result.scimitar
+                   ? "OK"
+                   : "PARTIAL")
            << " effect=" << effect
-           << " icue=" << (result.icue ? "ok" : "error")
+           << " k70=" << (result.k70 ? "ok" : "error")
+           << " mm700=" << (result.mm700 ? "ok" : "error")
            << " g560=" << (result.g560 ? "ok" : "error")
            << " scimitar=" << (result.scimitar ? "ok" : "error") << "\n";
     return output.str();
@@ -826,12 +994,12 @@ int create_server() {
 
 int main(int argc, char** argv) {
     Color current{0, 0, 255};
-    bool include_mousemat = false;
     AgentEffect effect = AgentEffect::Static;
+    bool request_accessibility = false;
     for (int index = 1; index < argc; ++index) {
         const std::string argument(argv[index]);
-        if (argument == "--include-mm700") {
-            include_mousemat = true;
+        if (argument == "--request-accessibility") {
+            request_accessibility = true;
         } else if (argument == "--color" && index + 1 < argc) {
             if (!parse_color(argv[++index], current)) {
                 std::cerr << "invalid color" << std::endl;
@@ -851,11 +1019,28 @@ int main(int argc, char** argv) {
         } else {
             std::cerr
                 << "usage: mac-agent [--color RRGGBB | "
-                   "--effect watercolor|stranger-things] "
-                   "[--include-mm700]"
+                   "--effect watercolor|stranger-things | "
+                   "--request-accessibility]"
                 << std::endl;
             return 64;
         }
+    }
+
+    if (request_accessibility) {
+        const void* keys[] = {kAXTrustedCheckOptionPrompt};
+        const void* values[] = {kCFBooleanTrue};
+        CFDictionaryRef options = CFDictionaryCreate(
+            kCFAllocatorDefault,
+            keys,
+            values,
+            1,
+            &kCFCopyStringDictionaryKeyCallBacks,
+            &kCFTypeDictionaryValueCallBacks);
+        const bool trusted = AXIsProcessTrustedWithOptions(options);
+        CFRelease(options);
+        std::cout << "accessibility=" << (trusted ? "trusted" : "not-trusted")
+                  << std::endl;
+        return trusted ? 0 : 77;
     }
 
     std::signal(SIGINT, stop_handler);
@@ -868,20 +1053,22 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    ICueBackend icue(include_mousemat);
+    K70Backend k70;
+    MM700Backend mm700;
     G560Backend g560;
-    ScimitarBackend scimitar;
-    if (!icue.connect()) {
-        std::cerr << "iCUE connection failed" << std::endl;
-        return 2;
-    }
+    ScimitarInputMapper scimitar_input;
+    const bool scimitar_mapping_ready = scimitar_input.initialize();
+    std::cout << "scimitar-buttons="
+              << (scimitar_mapping_ready ? "ready" : "unavailable")
+              << std::endl;
+    ScimitarBackend scimitar(scimitar_mapping_ready);
     const auto effect_seconds = []() {
         return std::chrono::duration<double>(
             std::chrono::system_clock::now().time_since_epoch()).count();
     };
     ApplyResult last_result = effect == AgentEffect::Static
-        ? apply_color(icue, g560, scimitar, current)
-        : apply_effect(effect, icue, g560, scimitar, effect_seconds());
+        ? apply_color(k70, mm700, g560, scimitar, current)
+        : apply_effect(effect, k70, mm700, g560, scimitar, effect_seconds());
     std::cout << (effect == AgentEffect::Static
         ? result_line(current, last_result)
         : effect_result_line(effect_name(effect), last_result));
@@ -893,7 +1080,7 @@ int main(int argc, char** argv) {
     }
     std::cout << "listening=127.0.0.1:" << kListenPort << std::endl;
 
-    while (running.load() && icue.connected()) {
+    while (running.load()) {
         fd_set read_set;
         FD_ZERO(&read_set);
         FD_SET(server, &read_set);
@@ -923,7 +1110,12 @@ int main(int argc, char** argv) {
                         if (parse_color(command.substr(6), requested)) {
                             effect = AgentEffect::Static;
                             current = requested;
-                            last_result = apply_color(icue, g560, scimitar, current);
+                            last_result = apply_color(
+                                k70,
+                                mm700,
+                                g560,
+                                scimitar,
+                                current);
                             response = result_line(current, last_result);
                         } else {
                             response = "ERROR color\n";
@@ -932,7 +1124,8 @@ int main(int argc, char** argv) {
                         effect = AgentEffect::Watercolor;
                         last_result = apply_effect(
                             effect,
-                            icue,
+                            k70,
+                            mm700,
                             g560,
                             scimitar,
                             effect_seconds());
@@ -941,7 +1134,8 @@ int main(int argc, char** argv) {
                         effect = AgentEffect::StrangerThings;
                         last_result = apply_effect(
                             effect,
-                            icue,
+                            k70,
+                            mm700,
                             g560,
                             scimitar,
                             effect_seconds());
@@ -961,7 +1155,8 @@ int main(int argc, char** argv) {
         if (effect != AgentEffect::Static && now >= next_effect_frame) {
             last_result = apply_effect(
                 effect,
-                icue,
+                k70,
+                mm700,
                 g560,
                 scimitar,
                 effect_seconds());
@@ -969,6 +1164,14 @@ int main(int argc, char** argv) {
         }
         if (!scimitar.heartbeat_if_due()) {
             std::cerr << "scimitar heartbeat failed" << std::endl;
+        }
+        if (!mm700.heartbeat_if_due()) {
+            std::cerr << "mm700 heartbeat failed" << std::endl;
+        }
+        if (scimitar_mapping_ready && !scimitar_input.poll()) {
+            std::cerr << "scimitar input listener failed" << std::endl;
+            close(server);
+            return 5;
         }
     }
 

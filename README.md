@@ -116,9 +116,9 @@ incompleta. Os seis fans atuais totalizam 108 LEDs.
 
 ## Agente do Mac
 
-O agente em `mac-agent/` controla o K70 MAX e o **MM700** pelo SDK oficial do
-iCUE. O Scimitar e o G560 usam backends HID diretos. Ele roda como LaunchAgent,
-escuta apenas em `127.0.0.1:7531` e é acessado por este PC através da conexão SSH
+O agente em `mac-agent/` controla K70 MAX, **MM700**, Scimitar e G560 diretamente
+por HID, sem depender do iCUE ou de seu SDK. Ele roda como LaunchAgent, escuta
+apenas em `127.0.0.1:7531` e é acessado por este PC através da conexão SSH
 autenticada.
 
 O alvo padrão é `michel@172.16.0.104`:
@@ -130,9 +130,11 @@ headless-lights mac-effect watercolor
 headless-lights mac-effect stranger-things
 ```
 
-`mac-color` aplica a cor ao K70 MAX, MM700, Scimitar e G560. Outro alvo pode ser
-informado com `--host usuario@endereco`. A compilação e instalação do agente
-estão descritas em [`mac-agent/README.md`](mac-agent/README.md).
+`mac-color` aplica a cor ao K70 MAX, MM700, Scimitar e G560. Os botões laterais
+do Scimitar são recriados como `1` até `=` e exigem que somente o binário final
+tenha permissão de Acessibilidade. Outro alvo pode ser informado com
+`--host usuario@endereco`. A compilação e instalação estão descritas em
+[`mac-agent/README.md`](mac-agent/README.md).
 
 ## Efeitos animados
 

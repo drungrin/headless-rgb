@@ -8,7 +8,8 @@ DEFAULT_MAC_HOST = "michel@172.16.0.104"
 _RESPONSE = re.compile(
     r"^(?:OK|PARTIAL) "
     r"(?:color=[0-9a-f]{6}|effect=(?:watercolor|stranger-things)) "
-    r"icue=(?:ok|error) g560=(?:ok|error) scimitar=(?:ok|error)$"
+    r"k70=(?:ok|error) mm700=(?:ok|error) "
+    r"g560=(?:ok|error) scimitar=(?:ok|error)$"
 )
 
 
