@@ -61,3 +61,11 @@ executável final:
 ```
 
 Não conceda Acessibilidade a `sshd-keygen-wrapper`.
+
+Como o instalador usa assinatura ad-hoc, recompilar o agente altera sua identidade
+para a TCC. Depois de uma atualização do binário, pode ser necessário remover e
+adicionar novamente somente `headless-lights-agent` na lista de Acessibilidade.
+
+O backend do Scimitar considera uma resposta vazia como timeout e invalida o
+endpoint RGB. Quando o mouse volta ao wireless, o agente tenta novamente após
+dois segundos, restaura a animação e mantém o mapeamento lateral ativo.

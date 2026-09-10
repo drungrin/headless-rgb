@@ -136,6 +136,10 @@ tenha permissão de Acessibilidade. Outro alvo pode ser informado com
 `--host usuario@endereco`. A compilação e instalação estão descritas em
 [`mac-agent/README.md`](mac-agent/README.md).
 
+O agente detecta timeout do subdispositivo wireless: ao desligar e ligar o
+Scimitar, ele reenvia modo software e abertura do endpoint RGB com backoff de
+dois segundos. A animação e os botões retornam sem reiniciar o LaunchAgent.
+
 ## Efeitos animados
 
 O Watercolor Spectrum usa faixas largas de ciano, azul, violeta, magenta, rosa e

@@ -389,7 +389,7 @@ private:
             return false;
         }
         std::array<unsigned char, 128> response{};
-        return hid_read_timeout(device_, response.data(), response.size(), 500) >= 0;
+        return hid_read_timeout(device_, response.data(), response.size(), 500) > 0;
     }
 
     void reset(bool restore_hardware) {
@@ -530,7 +530,7 @@ private:
             return false;
         }
         std::array<unsigned char, 64> response{};
-        return hid_read_timeout(device_, response.data(), response.size(), 500) >= 0;
+        return hid_read_timeout(device_, response.data(), response.size(), 500) > 0;
     }
 
     void reset(bool restore_hardware) {
@@ -774,7 +774,11 @@ public:
         if (!allow_software_) {
             return false;
         }
+        if (std::chrono::steady_clock::now() < next_retry_) {
+            return false;
+        }
         if (device_ == nullptr && !open()) {
+            defer_retry();
             return false;
         }
         constexpr std::array<unsigned char, 4> software{0x01, 0x03, 0x00, 0x02};
@@ -783,6 +787,8 @@ public:
         if (!prepared_) {
             if (!transfer(software.data(), software.size()) ||
                 !transfer(open_leds.data(), open_leds.size())) {
+                prepared_ = false;
+                defer_retry();
                 return false;
             }
             prepared_ = true;
@@ -795,11 +801,16 @@ public:
             payload[12 + zone] = colors[zone].blue;
         }
         last_heartbeat_ = std::chrono::steady_clock::now();
-        return transfer(
+        const bool success = transfer(
             write_color.data(),
             write_color.size(),
             payload.data(),
             payload.size());
+        if (!success) {
+            prepared_ = false;
+            defer_retry();
+        }
+        return success;
     }
 
     bool heartbeat_if_due() {
@@ -812,7 +823,12 @@ public:
         }
         constexpr std::array<unsigned char, 1> heartbeat{0x12};
         last_heartbeat_ = now;
-        return transfer(heartbeat.data(), heartbeat.size());
+        const bool success = transfer(heartbeat.data(), heartbeat.size());
+        if (!success) {
+            prepared_ = false;
+            defer_retry();
+        }
+        return success;
     }
 
 private:
@@ -834,12 +850,17 @@ private:
             return false;
         }
         std::array<unsigned char, 64> response{};
-        return hid_read_timeout(device_, response.data(), response.size(), 500) >= 0;
+        return hid_read_timeout(device_, response.data(), response.size(), 500) > 0;
+    }
+
+    void defer_retry() {
+        next_retry_ = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     }
 
     hid_device* device_ = nullptr;
     bool allow_software_;
     bool prepared_ = false;
+    std::chrono::steady_clock::time_point next_retry_{};
     std::chrono::steady_clock::time_point last_heartbeat_{};
 };
 
