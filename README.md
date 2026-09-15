@@ -1,221 +1,193 @@
 # headless-lights
 
-Controlador RGB headless que sincroniza dispositivos ligados a este PC Linux e
-a um Mac na mesma rede. Há suporte a cores fixas, quadros por LED e aos efeitos
-animados Watercolor Spectrum, Stranger Things e Borderlands 4.
+Controlador RGB headless para Linux, com sincronização opcional de periféricos RGB conectados a um Mac na mesma rede. O projeto usa protocolos diretos para a fita Beelight e OpenRGB para os dispositivos locais compatíveis.
 
-## Hardware validado
+Ele foi criado para manter iluminação consistente sem depender de uma interface gráfica ou do iCUE.
 
-### PC Linux
+## Recursos
 
-- fita Beelight V3/AT32 (`2e3c:5740`), com 33 pixels;
-- duas memórias Corsair Vengeance RGB DDR5, com 12 LEDs cada;
-- ASUS PRIME Z690-P AURA (`0b05:19af`);
-- Asiahorse Lightsaber-X mATX, com 24 LEDs no `Aura Addressable 2`;
-- Corsair iCUE LINK System Hub (`1b1c:0c3f`);
-- seis fans LX120/LX120-R/LX140-R, com 18 LEDs por fan.
+- Controle da fita USB **Beelight V3/AT32**, incluindo cor estática e frames por LED.
+- Controle de RAM Corsair RGB, controladores ASUS Aura e fans Corsair iCUE LINK via OpenRGB.
+- Efeitos animados sincronizados entre Linux e macOS pelo relógio Unix:
+  - Watercolor Spectrum;
+  - Stranger Things;
+  - Borderlands 4.
+- Serviços de usuário do systemd para manter iluminação estática ou efeitos persistentes.
+- Agente macOS em C++ que controla periféricos por HID, sem SDK do iCUE.
+- Reconexão automática do Scimitar wireless após desconexão ou timeout.
 
-### Mac
+O projeto controla somente iluminação: não altera velocidade de fans, curvas térmicas nem outros parâmetros de refrigeração.
 
-- Corsair K70 MAX, com 116 LEDs;
-- Corsair MM700 RGB, com 3 LEDs;
-- Corsair Scimitar Elite Wireless SE, com 3 zonas;
-- Logitech G560, com 4 zonas.
+## Hardware testado
 
-O controlador não altera rotação, curvas térmicas ou outros parâmetros de
-refrigeração dos fans.
+| Plataforma | Dispositivo | Suporte |
+| --- | --- | --- |
+| Linux | Beelight V3/AT32 (`2e3c:5740`) | 33 pixels, protocolo serial direto |
+| Linux | Corsair Vengeance RGB DDR5 | 12 LEDs por módulo, via OpenRGB |
+| Linux | ASUS PRIME Z690-P Aura (`0b05:19af`) | Asiahorse Lightsaber-X, 24 LEDs em `Aura Addressable 2` |
+| Linux | Corsair iCUE LINK System Hub (`1b1c:0c3f`) | seis fans LX120/LX120-R/LX140-R, 18 LEDs por fan |
+| macOS | Corsair K70 MAX | 116 LEDs, HID direto |
+| macOS | Corsair MM700 RGB | 3 LEDs, HID direto |
+| macOS | Corsair Scimitar Elite Wireless SE | 3 zonas RGB e 12 botões laterais |
+| macOS | Logitech G560 | 4 zonas, HID direto |
 
-## Instalação no Linux
+O suporte é validado para esta combinação de dispositivos. Outros modelos podem funcionar, mas não são garantidos.
 
-Instale o OpenRGB e as ferramentas de acesso ao SMBus:
+## Requisitos
+
+### Linux
+
+- Python 3.11 ou superior;
+- OpenRGB;
+- `i2c-tools` para a RAM DDR5;
+- acesso aos grupos `dialout`, `i2c` e `plugdev`.
+
+Em distribuições baseadas em Debian ou Ubuntu:
 
 ```bash
 sudo apt install openrgb i2c-tools
 sudo usermod -aG dialout,i2c,plugdev "$USER"
 ```
 
-Instale a regra restrita aos controladores ASUS AURA e Corsair iCUE LINK
-validados neste computador:
+Saia da sessão e entre novamente (ou reinicie) para que os novos grupos sejam aplicados.
+
+### macOS (opcional)
+
+O agente do Mac requer o `hidapi` do Homebrew e permissões de Acessibilidade para o binário final. As instruções completas estão em [`mac-agent/README.md`](mac-agent/README.md).
+
+## Instalação
+
+Na raiz do repositório, instale o pacote em um ambiente virtual:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e .
+```
+
+A regra udev incluída limita o acesso direto aos controladores ASUS Aura e Corsair iCUE LINK identificados pelo projeto. Instale-a a partir da raiz do repositório:
 
 ```bash
 sudo install -o root -g root -m 0644 \
-  /home/michel/projects/headless-lights/udev/99-headless-lights-asus-aura.rules \
+  udev/99-headless-lights-asus-aura.rules \
   /etc/udev/rules.d/99-headless-lights-asus-aura.rules
 sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=hidraw --action=add
 ```
 
-Encerre a sessão e entre novamente, ou reinicie o computador, para que os
-serviços de usuário herdem os grupos novos. Depois instale o projeto:
+## Uso rápido
 
-```bash
-cd /home/michel/projects/headless-lights
-python3 -m venv .venv
-.venv/bin/pip install -e .
-```
+### Fita Beelight
 
-## Beelight
-
-O protocolo serial `55 AA 5A` foi recuperado do Beelight V3 e validado no
-hardware. Comandos disponíveis:
+Descubra a porta serial e consulte o dispositivo:
 
 ```bash
 headless-lights detect
 headless-lights info
-headless-lights on
-headless-lights off
-headless-lights brightness 60
+```
+
+Aplique cor, brilho ou um frame com uma cor por LED:
+
+```bash
 headless-lights color ff6600
+headless-lights brightness 60
 headless-lights pixels COR_01 COR_02 ... COR_33
+```
+
+Use `hold` para manter a porta aberta, responder aos heartbeats do dispositivo e restaurar a iluminação caso o USB seja reconectado:
+
+```bash
 headless-lights hold 0000ff --fps 20
 ```
 
-`pixels` exige exatamente uma cor por LED. O hardware analisado declara 33
-pixels e dois canais (`33, 0`). Um comando estático isolado não permanece no
-controlador; `hold` mantém a porta aberta, transmite por `RGB_TRANSFER`, responde
-a heartbeats e reconecta se o USB cair.
-
-Para manter somente uma cor fixa na Beelight:
+Para iniciar uma cor estática no login:
 
 ```bash
 headless-lights service-install 0000ff --fps 20
 ```
 
-Esse comando instala `headless-lights.service`. Ele não deve permanecer ativo ao
-mesmo tempo que um efeito animado com `--scope pc`, pois ambos usam a mesma porta
-serial. Na instalação atual, o serviço estático está desabilitado e o renderer
-de efeitos é o proprietário da Beelight.
-
-## Dispositivos OpenRGB locais
-
-As Vengeance DDR5 são filtradas por fabricante e `Type: DRAM` antes da escrita:
+### Dispositivos OpenRGB locais
 
 ```bash
+# RAM Corsair
 headless-lights ram-color 0000ff
 headless-lights ram-service-install 0000ff
-```
 
-A Asiahorse é limitada à ASUS PRIME Z690-P, zona `Aura Addressable 2`, com 24
-LEDs e brilho máximo:
-
-```bash
+# Fita Asiahorse ligada ao ASUS Aura
 headless-lights aura-color 0000ff
 headless-lights aura-service-install 0000ff
-```
 
-O iCUE LINK System Hub é detectado pelo nome e tipo, sem depender de seu índice
-no OpenRGB. Cada zona LX precisa receber um quadro próprio de 18 LEDs:
-
-```bash
+# Fans Corsair iCUE LINK
 headless-lights hub-hold 0000ff
 headless-lights hub-service-install 0000ff
 ```
 
-O backend falha de modo seguro se a quantidade de zonas ou LEDs estiver
-incompleta. Os seis fans atuais totalizam 108 LEDs.
+O controlador valida a topologia antes de gravar: a configuração testada espera seis zonas de 18 LEDs (108 LEDs no total) no hub e 24 LEDs na zona Aura configurada.
 
-## Agente do Mac
+### Efeitos animados
 
-O agente em `mac-agent/` controla K70 MAX, **MM700**, Scimitar e G560 diretamente
-por HID, sem depender do iCUE ou de seu SDK. Ele roda como LaunchAgent, escuta
-apenas em `127.0.0.1:7531` e é acessado por este PC através da conexão SSH
-autenticada.
+Os efeitos usam o tempo Unix como fase comum, para que as animações Linux e macOS permaneçam alinhadas.
 
-O alvo padrão é `michel@172.16.0.104`:
-
-```bash
-headless-lights mac-status
-headless-lights mac-color 0000ff
-headless-lights mac-effect watercolor
-headless-lights mac-effect stranger-things
-headless-lights mac-effect borderlands-4
-```
-
-`mac-color` aplica a cor ao K70 MAX, MM700, Scimitar e G560. Os botões laterais
-do Scimitar são recriados como `1` até `=` e exigem que somente o binário final
-tenha permissão de Acessibilidade. Outro alvo pode ser informado com
-`--host usuario@endereco`. A compilação e instalação estão descritas em
-[`mac-agent/README.md`](mac-agent/README.md).
-
-O agente detecta timeout do subdispositivo wireless: ao desligar e ligar o
-Scimitar, ele reenvia modo software e abertura do endpoint RGB com backoff de
-dois segundos. A animação e os botões retornam sem reiniciar o LaunchAgent.
-
-## Efeitos animados
-
-O Watercolor Spectrum usa faixas largas de ciano, azul, violeta, magenta, rosa e
-amarelo claro, com interpolação suave e deriva espacial.
-
-O Stranger Things reproduz a parte ambiente do perfil oficial: fundo azul/roxo
-quase preto, ondas e chuva vermelhas e uma sequência de flashes a cada sete
-segundos. No Mac ele não reage às teclas.
-
-Borderlands 4 adapta as camadas contínuas do perfil iCUE: base vermelha, onda
-laranja de cinco segundos e onda dourada de 7,3 segundos. Os efeitos originais
-acionados por tecla não se aplicam aos dispositivos headless.
-
-Os três efeitos rodam a 12 FPS e usam o tempo Unix como relógio de fase comum
-entre Linux e Mac.
-
-Escopos disponíveis no Linux:
-
-| Escopo | Dispositivos |
+| Efeito | Descrição |
 | --- | --- |
-| `hub` | fans iCUE LINK |
-| `local` | fans, Vengeance e Asiahorse |
-| `pc` | fans, Vengeance, Asiahorse e Beelight |
+| `watercolor` | Faixas suaves de ciano, azul, violeta, magenta, rosa e amarelo claro |
+| `stranger-things` | Fundo azul/roxo, chuva e ondas vermelhas, com flashes periódicos |
+| `borderlands-4` | Camadas contínuas vermelha, laranja e dourada |
 
-O Mac não faz parte do significado de `--scope pc`: seu LaunchAgent executa o
-mesmo algoritmo localmente e usa o mesmo relógio. O efeito inclui K70 MAX,
-**MM700**, Scimitar e G560.
-
-Previews temporários:
+Execute um preview temporário:
 
 ```bash
 headless-lights effect-preview watercolor --scope hub --seconds 20 --fps 12
-headless-lights effect-preview watercolor --scope local --seconds 20 --fps 12
-headless-lights effect-preview watercolor --scope pc --seconds 20 --fps 12
 headless-lights effect-preview stranger-things --scope pc --seconds 21 --fps 12
 headless-lights effect-preview borderlands-4 --scope pc --seconds 20 --fps 12
 ```
 
-Antes de executar um preview ou uma cor estática local enquanto um efeito
-persistente estiver ativo, pause o renderer; caso contrário, dois produtores
-enviarão quadros ao mesmo tempo:
-
-```bash
-systemctl --user stop headless-lights-effect.service
-# execute o preview ou comando estático
-systemctl --user start headless-lights-effect.service
-```
-
-No Mac, `mac-color` troca o agente para cor estática. Use `mac-effect watercolor`,
-`mac-effect stranger-things` ou `mac-effect borderlands-4` para voltar a uma
-animação.
-
-Execução contínua em primeiro plano ou como serviço:
+Mantenha um efeito em primeiro plano ou instale-o como serviço:
 
 ```bash
 headless-lights effect-hold watercolor --scope pc --fps 12
-headless-lights effect-hold stranger-things --scope pc --fps 12
-headless-lights effect-service-install stranger-things --scope pc --fps 12
 headless-lights effect-service-install borderlands-4 --scope pc --fps 12
 ```
 
-O instalador grava e inicia `headless-lights-effect.service`. Executá-lo com
-outro efeito substitui o renderer ativo.
+Os escopos disponíveis são:
 
-## Serviços e ordem de inicialização
+| Escopo | Dispositivos |
+| --- | --- |
+| `hub` | Fans iCUE LINK |
+| `local` | Fans, RAM Corsair e Asiahorse |
+| `pc` | Fans, RAM Corsair, Asiahorse e Beelight |
 
-| Serviço | Tipo | Responsabilidade |
-| --- | --- | --- |
-| `headless-lights-ram.service` | oneshot | aplica o estado inicial das Vengeance |
-| `headless-lights-aura.service` | oneshot | configura a Asiahorse depois da RAM |
-| `headless-lights-hub.service` | contínuo | mantém o hub e o servidor OpenRGB em `127.0.0.1:6742` |
-| `headless-lights-effect.service` | contínuo | envia os quadros do efeito selecionado após o hub iniciar |
-| `com.headless-lights.agent` | LaunchAgent no Mac | anima K70, MM700, Scimitar e G560 |
+Não execute um preview ou uma cor estática no mesmo dispositivo enquanto o serviço de efeitos estiver ativo. Pause o renderer antes de trocar temporariamente a iluminação:
 
-Estado dos serviços Linux:
+```bash
+systemctl --user stop headless-lights-effect.service
+# Execute o comando desejado.
+systemctl --user start headless-lights-effect.service
+```
+
+## Agente macOS
+
+O agente em [`mac-agent/`](mac-agent/) controla K70 MAX, MM700, Scimitar e G560 por HID direto. Ele escuta somente em `127.0.0.1:7531`; o computador Linux o acessa por uma conexão SSH autenticada.
+
+No Mac, instale o agente com:
+
+```bash
+cd mac-agent
+sh install.sh
+```
+
+Depois, no Linux, use um destino SSH configurado:
+
+```bash
+headless-lights mac-status --host usuario@mac.local
+headless-lights mac-color 0000ff --host usuario@mac.local
+headless-lights mac-effect stranger-things --host usuario@mac.local
+```
+
+O Scimitar precisa permanecer em modo software para receber animações RGB. Nesse modo, o agente restaura os 12 botões laterais como as teclas `1` a `=` e, portanto, precisa da permissão de Acessibilidade apenas para o executável final do agente.
+
+## Serviços
+
+A instalação de serviços cria unidades de usuário; não é necessário executar o controlador como root. Consulte o estado dos serviços Linux com:
 
 ```bash
 systemctl --user status \
@@ -225,32 +197,16 @@ systemctl --user status \
   headless-lights-effect.service
 ```
 
-## Adição dos dois fans futuros
+## Desenvolvimento e testes
 
-Depois de conectar os dois novos fans, reinicie o servidor para redetectar a
-topologia e depois o renderer para obter as oito zonas novas:
-
-```bash
-systemctl --user restart headless-lights-hub.service
-systemctl --user restart headless-lights-effect.service
-```
-
-O backend aceitará automaticamente oito fans quando o hub reportar 144 LEDs —
-oito zonas de 18 LEDs. Uma topologia parcial é rejeitada sem enviar quadros.
-
-## Testes
+Execute a suíte de testes a partir da raiz do repositório:
 
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-Os testes cobrem o protocolo Beelight, transporte SSH, seleção segura dos
-dispositivos OpenRGB, topologias de seis e oito fans, unidades systemd e os
-renderers Watercolor e Stranger Things.
+Os testes cobrem o protocolo Beelight, seleção de dispositivos OpenRGB, topologias do hub, unidades systemd, comunicação com o agente macOS e renderização dos efeitos.
 
-## Próximas expansões
+## Licença
 
-- novos efeitos sobre a mesma camada de renderização;
-- calibração opcional de brilho por dispositivo;
-- layouts espaciais configuráveis para representar a posição física de cada
-  componente no cockpit.
+Este repositório ainda não contém uma licença de distribuição. Antes de reutilizar, modificar ou redistribuir o código, entre em contato com a pessoa mantenedora. Alguns arquivos em [`mac-agent/`](mac-agent/) possuem atribuições e condições de licença específicas, documentadas no README daquele diretório.
