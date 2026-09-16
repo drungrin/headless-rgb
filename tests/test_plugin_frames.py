@@ -118,6 +118,15 @@ class PluginFrameTests(unittest.TestCase):
         lit = {color for color in colors if color != (0, 0, 0)}
         self.assertEqual(lit, {(0xFF, 0x66, 0x00)})
 
+    def test_g560_is_throttled_below_the_other_zone_devices(self) -> None:
+        """The G560 is four request/reply transactions per frame. The old 40ms
+        interval produced about 15fps in SignalRGB and macOS rejected 12.6% of
+        its reports; 100ms is 10fps and keeps protocol headroom."""
+        intervals = self.frames["layout"]["intervals"]
+        self.assertEqual(intervals["g560"], 100)
+        self.assertGreater(intervals["g560"], intervals["mm700"])
+        self.assertGreater(intervals["g560"], intervals["scimitar"])
+
     def test_k70_layout_matches_the_generated_tables(self) -> None:
         """The plugin's own view of the layout must match the C++ header."""
         positions = self.frames["layout"]

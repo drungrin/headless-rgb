@@ -61,12 +61,14 @@ constexpr std::size_t kMaxStreamClients = 6;
 constexpr std::chrono::seconds kStreamIdleReap{120};
 
 // Per-device floor between HID writes. The K70 costs four blocking round trips
-// per frame, so it gets the longest interval; the G560 sleeps 1ms per zone
-// report and a speaker gains nothing from running faster.
+// per frame. The G560 is deliberately slower: one frame is four synchronous
+// request/reply transactions, and pushing those reports without waiting made
+// macOS reject about 12.6% of them and eventually reset the complete USB device
+// (including its audio interface).
 constexpr std::array<std::chrono::milliseconds, stream::kDeviceCount> kStreamInterval{
     std::chrono::milliseconds{33},
     std::chrono::milliseconds{16},
-    std::chrono::milliseconds{40},
+    std::chrono::milliseconds{100},
     std::chrono::milliseconds{16},
 };
 
@@ -685,8 +687,11 @@ public:
         if (device_ == nullptr) {
             return false;
         }
-        // Replies are never inspected, so blocking on them only adds latency.
-        hid_set_nonblocking(device_, 1);
+        // The G560 protocol is request/reply. OpenRGB waits for the reply after
+        // every report; making this descriptor non-blocking let the next zone go
+        // out before the device had answered the previous one. A bounded read in
+        // write_report() keeps the ordering without allowing a missing reply to
+        // stall the whole agent.
         return true;
     }
 
@@ -748,26 +753,24 @@ public:
 
 private:
     bool write_report(const std::array<unsigned char, 20>& report) {
+        constexpr int kReplyTimeoutMs = 20;
         for (int attempt = 0; attempt < 3; ++attempt) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            if (hid_write(device_, report.data(), report.size()) > 0) {
-                drain();
+            if (hid_write(device_, report.data(), report.size()) <= 0) {
+                continue;
+            }
+
+            // The reply payload is not useful, but the reply itself is the
+            // device's flow control. Do not issue the next zone until it arrives.
+            // OpenRGB uses a blocking hid_read here; 20ms keeps the same ordering
+            // while bounding a missing reply to 60ms over all three attempts.
+            std::array<unsigned char, 33> response{};
+            if (hid_read_timeout(
+                    device_, response.data(), response.size(), kReplyTimeoutMs) > 0) {
                 return true;
             }
         }
         return false;
-    }
-
-    // The device answers every report and the answers are not used. Discard
-    // whatever is already queued instead of waiting for it: a G560 that accepts
-    // writes but stops replying used to cost 100ms per zone, every frame.
-    void drain() {
-        std::array<unsigned char, 33> response{};
-        for (int packet = 0; packet < 8; ++packet) {
-            if (hid_read(device_, response.data(), response.size()) <= 0) {
-                return;
-            }
-        }
     }
 
     void reset() {

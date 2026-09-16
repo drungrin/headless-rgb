@@ -159,7 +159,9 @@ const DEVICES = {
 		ledPositions: [[0, 2], [0, 0], [4, 2], [4, 0]],
 		wireSlots: 4,
 		wireIndex: null,
-		intervalMs: 40,
+		// Four request/reply HID transactions per frame. At ~15fps macOS
+		// rejected 12.6% of the reports; 10fps leaves flow-control headroom.
+		intervalMs: 100,
 	},
 	"scimitar": {
 		deviceId: 3,
