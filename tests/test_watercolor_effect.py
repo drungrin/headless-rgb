@@ -11,39 +11,21 @@ Skipped when Node is not installed.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-import shutil
-import subprocess
 import unittest
 
 from headless_lights import effects
+from signalrgb_effect_harness import (
+    EFFECTS_DIR,
+    NODE,
+    T0,
+    axis_is_parallel,
+    rgb,
+    run_effect,
+    spans,
+)
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DUMPER = REPO_ROOT / "signalrgb" / "tests" / "dump_watercolor_stops.mjs"
-EFFECT = REPO_ROOT / "signalrgb" / "effects" / "watercolor.html"
-
-
-def _node() -> str | None:
-    found = shutil.which("node")
-    if found:
-        return found
-    # winget installs Node outside the shell's default PATH.
-    fallback = Path("C:/Program Files/nodejs/node.exe")
-    return str(fallback) if fallback.exists() else None
-
-
-NODE = _node()
-
-
-def _rgb(value: str) -> tuple[int, int, int]:
-    """Parse the "rgb(r, g, b)" strings the effect writes into the gradient."""
-    inner = value[value.index("(") + 1 : value.index(")")]
-    parts = tuple(int(component) for component in inner.split(","))
-    if len(parts) != 3:
-        raise AssertionError(f"not an RGB triple: {value!r}")
-    return parts
+EFFECT = "watercolor.html"
 
 
 @unittest.skipIf(NODE is None, "Node.js is not installed")
@@ -52,54 +34,52 @@ class WatercolorEffectTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        completed = subprocess.run(
-            (NODE, str(DUMPER)),
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=120,
+        cls.dump = run_effect(
+            EFFECT,
+            {
+                # 12 s is the effect's own drift period, so the two frames must
+                # differ.
+                "defaults": {
+                    "globals": {"spread": 25, "tilt": 17},
+                    "times": [T0, T0 + 12],
+                },
+                "flat": {"globals": {"spread": 25, "tilt": 0}, "times": [T0]},
+                "wide": {"globals": {"spread": 60, "tilt": 17}, "times": [T0]},
+                "narrow": {"globals": {"spread": 5, "tilt": 40}, "times": [T0]},
+            },
         )
-        if completed.returncode != 0:
-            raise AssertionError(
-                f"the watercolor dumper failed:\n{completed.stderr.strip()}"
-            )
-        cls.dump = json.loads(completed.stdout)
 
-    # -- helpers ------------------------------------------------------------
-
-    def _spans(self, scenario: dict) -> tuple[float, float]:
-        """Reproduce spanX()/spanY() from the effect."""
-        span_x = scenario["spread"] / 10.0
-        return span_x, span_x * scenario["tilt"] / 100.0
+    def scenario(self, name: str) -> dict:
+        return self.dump["scenarios"][name]
 
     # -- the contract -------------------------------------------------------
 
     def test_every_stop_matches_the_python_renderer(self) -> None:
         """The whole point: the same position and clock give the same colour."""
         for name in ("defaults", "flat", "wide", "narrow"):
-            scenario = self.dump[name]
-            span_x, span_y = self._spans(scenario)
+            scenario = self.scenario(name)
+            span_x, span_y = spans(scenario["globals"])
             total = span_x + span_y
             for frame in scenario["frames"]:
-                for stop in frame["gradient"]["stops"]:
+                for stop in frame["gradients"][0]["stops"]:
                     expected = effects.watercolor_color(
                         stop["offset"] * total, frame["elapsed"]
                     )
                     self.assertEqual(
-                        _rgb(stop["color"]),
+                        rgb(stop["color"]),
                         expected,
                         f"{name} @ offset {stop['offset']}, t={frame['elapsed']}",
                     )
 
     def test_the_effect_is_phase_locked_to_the_unix_clock(self) -> None:
-        """Two frames 12 s apart must differ, and each must match Python at
-        that same wall-clock instant. This is what keeps the Mac from jumping
-        when it falls back to its own renderer."""
-        first, second = self.dump["defaults"]["frames"]
+        """Two frames 12 s apart must differ, and each must match Python at that
+        same wall-clock instant. This is what keeps the Mac from jumping when it
+        falls back to its own renderer."""
+        first, second = self.scenario("defaults")["frames"]
         self.assertEqual(second["elapsed"] - first["elapsed"], 12)
         self.assertNotEqual(
-            [stop["color"] for stop in first["gradient"]["stops"]],
-            [stop["color"] for stop in second["gradient"]["stops"]],
+            [stop["color"] for stop in first["gradients"][0]["stops"]],
+            [stop["color"] for stop in second["gradients"][0]["stops"]],
             "a 12 s gap is the effect's own drift period; it must move",
         )
 
@@ -108,15 +88,12 @@ class WatercolorEffectTests(unittest.TestCase):
         tilt runs the wrong way across the canvas."""
         canvas = self.dump["canvas"]
         for name in ("defaults", "wide", "narrow"):
-            scenario = self.dump[name]
-            span_x, span_y = self._spans(scenario)
-            gradient = scenario["frames"][0]["gradient"]
+            scenario = self.scenario(name)
+            span_x, span_y = spans(scenario["globals"])
+            gradient = scenario["frames"][0]["gradients"][0]
             self.assertEqual((gradient["x0"], gradient["y0"]), (0, 0))
-            # Cross product of the axis and the expected direction is zero when
-            # they are parallel.
             self.assertAlmostEqual(
-                gradient["x1"] * (span_y / canvas["height"])
-                - gradient["y1"] * (span_x / canvas["width"]),
+                axis_is_parallel(gradient, span_x, span_y, canvas),
                 0.0,
                 places=9,
                 msg=name,
@@ -127,10 +104,7 @@ class WatercolorEffectTests(unittest.TestCase):
         palette is compressed or clipped relative to the other renderers."""
         canvas = self.dump["canvas"]
         for name in ("defaults", "wide", "narrow"):
-            scenario = self.dump[name]
-            span_x, span_y = self._spans(scenario)
-            gradient = scenario["frames"][0]["gradient"]
-            # Gradient parameter of the canvas corner, projected onto the axis.
+            gradient = self.scenario(name)["frames"][0]["gradients"][0]
             length = gradient["x1"] ** 2 + gradient["y1"] ** 2
             corner = (
                 canvas["width"] * gradient["x1"] + canvas["height"] * gradient["y1"]
@@ -138,18 +112,18 @@ class WatercolorEffectTests(unittest.TestCase):
             self.assertAlmostEqual(corner, 1.0, places=9, msg=name)
 
     def test_no_tilt_gives_a_horizontal_gradient(self) -> None:
-        gradient = self.dump["flat"]["frames"][0]["gradient"]
+        gradient = self.scenario("flat")["frames"][0]["gradients"][0]
         self.assertEqual(gradient["y1"], 0)
         self.assertGreater(gradient["x1"], 0)
 
     def test_spread_changes_how_much_palette_fits_on_the_canvas(self) -> None:
-        narrow_x, _ = self._spans(self.dump["narrow"])
-        wide_x, _ = self._spans(self.dump["wide"])
+        narrow_x, _ = spans(self.scenario("narrow")["globals"])
+        wide_x, _ = spans(self.scenario("wide")["globals"])
         self.assertLess(narrow_x, wide_x)
         colors = {
             name: {
-                _rgb(stop["color"])
-                for stop in self.dump[name]["frames"][0]["gradient"]["stops"]
+                rgb(stop["color"])
+                for stop in self.scenario(name)["frames"][0]["gradients"][0]["stops"]
             }
             for name in ("narrow", "wide")
         }
@@ -165,50 +139,43 @@ class WatercolorEffectTests(unittest.TestCase):
         """Ultralight is slow at repeated fills; Rainbow.html says so in its own
         source. One gradient and one full-canvas fill is the budget."""
         canvas = self.dump["canvas"]
-        for frame in self.dump["defaults"]["frames"]:
-            self.assertEqual(frame["newGradients"], 1)
+        for frame in self.scenario("defaults")["frames"]:
+            self.assertEqual(len(frame["gradients"]), 1)
+            self.assertEqual(len(frame["fills"]), 1)
+            fill = frame["fills"][0]
             self.assertEqual(
-                frame["fill"],
-                {
-                    "x": 0,
-                    "y": 0,
-                    "width": canvas["width"],
-                    "height": canvas["height"],
-                    "gradient": frame["fill"]["gradient"],
-                    "solid": None,
-                },
+                (fill["x"], fill["y"], fill["width"], fill["height"]),
+                (0, 0, canvas["width"], canvas["height"]),
             )
-            self.assertIsNotNone(
-                frame["fill"]["gradient"], "the fill must use the gradient"
-            )
+            self.assertEqual(fill["gradient"], 0, "the fill must use the gradient")
+            self.assertIsNone(fill["solid"])
 
     def test_the_canvas_is_the_size_signalrgb_expects(self) -> None:
         self.assertEqual(self.dump["canvas"], {"width": 320, "height": 200})
 
     def test_the_effect_is_named_and_attributed(self) -> None:
         self.assertEqual(self.dump["title"], "Watercolor Spectrum")
-        self.assertIn('publisher="headless-lights"', EFFECT.read_text(encoding="utf-8"))
+        source = (EFFECTS_DIR / EFFECT).read_text(encoding="utf-8")
+        self.assertIn('publisher="headless-lights"', source)
 
     def test_every_declared_setting_is_actually_read(self) -> None:
         """A <meta property> the script never reads is a dead control in the UI."""
         declared = {entry["property"] for entry in self.dump["meta"]}
         self.assertEqual(declared, {"spread", "tilt"})
-        read = set(self.dump["defaults"]["reads"])
+        read = set(self.scenario("defaults")["reads"])
         self.assertTrue(declared <= read, f"never read: {declared - read}")
 
     def test_settings_declare_a_usable_range(self) -> None:
         for entry in self.dump["meta"]:
             self.assertEqual(entry["type"], "number", entry["property"])
             low, high = int(entry["min"]), int(entry["max"])
-            default = int(entry["default"])
             self.assertLess(low, high, entry["property"])
-            self.assertTrue(low <= default <= high, entry["property"])
+            self.assertTrue(low <= int(entry["default"]) <= high, entry["property"])
 
     def test_the_default_spread_reproduces_the_k70_mapping(self) -> None:
         """macstream.py renders the K70 as x * 1.05 + y * 0.18. The defaults are
         chosen so a keyboard-sized device sees the same shape."""
-        scenario = self.dump["defaults"]
-        span_x, span_y = self._spans(scenario)
+        span_x, span_y = spans(self.scenario("defaults")["globals"])
         self.assertAlmostEqual(span_y / span_x, 0.18 / 1.05, places=2)
 
 
