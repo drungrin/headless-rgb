@@ -3,6 +3,8 @@
 // layout derive from OpenLinkHub. See mac-agent/README.md for attribution.
 
 #include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -31,6 +33,7 @@
 #include <hidapi/hidapi_darwin.h>
 
 #include "k70max_layout.h"
+#include "stream_protocol.h"
 
 namespace {
 
@@ -45,6 +48,40 @@ constexpr unsigned short kG560Usage = 0x0202;
 constexpr int kScimitarControlInterface = 1;
 constexpr unsigned char kScimitarEndpoint = 0x09;
 constexpr int kListenPort = 7531;
+constexpr int kStreamPort = 7532;
+
+// A device that stops receiving frames for this long goes back to rendering the
+// locally configured effect, so the Mac keeps its lighting when the PC sleeps,
+// SignalRGB closes, or the SSH tunnel drops.
+constexpr std::chrono::milliseconds kStreamTimeout{3000};
+
+// Four devices need four connections; the headroom absorbs a reconnect that
+// overlaps a half-open socket the peer has not closed yet.
+constexpr std::size_t kMaxStreamClients = 6;
+constexpr std::chrono::seconds kStreamIdleReap{120};
+
+// Per-device floor between HID writes. The K70 costs four blocking round trips
+// per frame, so it gets the longest interval; the G560 sleeps 1ms per zone
+// report and a speaker gains nothing from running faster.
+constexpr std::array<std::chrono::milliseconds, stream::kDeviceCount> kStreamInterval{
+    std::chrono::milliseconds{33},
+    std::chrono::milliseconds{16},
+    std::chrono::milliseconds{40},
+    std::chrono::milliseconds{16},
+};
+
+// Bound on how much a single connection may hand us per loop pass, so one noisy
+// peer cannot starve the HID writes or the Scimitar input poll.
+constexpr std::size_t kStreamMaxDrainPerPass = 65536;
+
+// Devices answer in well under a millisecond; this only bounds a wedged one.
+constexpr int kHidReadTimeoutMs = 250;
+
+constexpr std::chrono::seconds kBackendRetryDelay{2};
+
+static_assert(
+    stream::kLedCounts[0] == kK70LedCoordinates.size(),
+    "the wire frame must carry one slot per K70 hardware channel");
 
 std::atomic<bool> running{true};
 
@@ -339,6 +376,45 @@ public:
         return set_frame(frame);
     }
 
+    bool set_frame(const std::array<Color, 142>& frame) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now < next_retry_) {
+            return false;
+        }
+        if (!prepare()) {
+            reset(false);
+            defer_retry();
+            return false;
+        }
+        std::array<unsigned char, 428> color_data{};
+        for (std::size_t channel = 0; channel < frame.size(); ++channel) {
+            color_data[channel * 3] = frame[channel].red;
+            color_data[channel * 3 + 1] = frame[channel].green;
+            color_data[channel * 3 + 2] = frame[channel].blue;
+        }
+        std::array<unsigned char, 434> packet{};
+        packet[0] = 0xac;
+        packet[1] = 0x01;
+        packet[4] = 0x12;
+        std::memcpy(packet.data() + 6, color_data.data(), color_data.size());
+        constexpr std::array<unsigned char, 2> first{0x06, 0x01};
+        constexpr std::array<unsigned char, 2> next{0x07, 0x01};
+        for (std::size_t offset = 0; offset < packet.size(); offset += 125) {
+            const std::size_t size = std::min<std::size_t>(125, packet.size() - offset);
+            const auto& endpoint = offset == 0 ? first : next;
+            if (!transfer(
+                    endpoint.data(),
+                    endpoint.size(),
+                    packet.data() + offset,
+                    size)) {
+                reset(false);
+                defer_retry();
+                return false;
+            }
+        }
+        return true;
+    }
+
 private:
     bool open() {
         hid_device_info* devices = hid_enumerate(kCorsairVendor, kK70MaxProduct);
@@ -373,39 +449,6 @@ private:
         return prepared_;
     }
 
-    bool set_frame(const std::array<Color, 142>& frame) {
-        if (!prepare()) {
-            reset(false);
-            return false;
-        }
-        std::array<unsigned char, 428> color_data{};
-        for (std::size_t channel = 0; channel < frame.size(); ++channel) {
-            color_data[channel * 3] = frame[channel].red;
-            color_data[channel * 3 + 1] = frame[channel].green;
-            color_data[channel * 3 + 2] = frame[channel].blue;
-        }
-        std::array<unsigned char, 434> packet{};
-        packet[0] = 0xac;
-        packet[1] = 0x01;
-        packet[4] = 0x12;
-        std::memcpy(packet.data() + 6, color_data.data(), color_data.size());
-        constexpr std::array<unsigned char, 2> first{0x06, 0x01};
-        constexpr std::array<unsigned char, 2> next{0x07, 0x01};
-        for (std::size_t offset = 0; offset < packet.size(); offset += 125) {
-            const std::size_t size = std::min<std::size_t>(125, packet.size() - offset);
-            const auto& endpoint = offset == 0 ? first : next;
-            if (!transfer(
-                    endpoint.data(),
-                    endpoint.size(),
-                    packet.data() + offset,
-                    size)) {
-                reset(false);
-                return false;
-            }
-        }
-        return true;
-    }
-
     bool transfer(
         const unsigned char* endpoint,
         std::size_t endpoint_size,
@@ -424,7 +467,8 @@ private:
             return false;
         }
         std::array<unsigned char, 128> response{};
-        return hid_read_timeout(device_, response.data(), response.size(), 500) > 0;
+        return hid_read_timeout(
+                   device_, response.data(), response.size(), kHidReadTimeoutMs) > 0;
     }
 
     void reset(bool restore_hardware) {
@@ -440,8 +484,15 @@ private:
         prepared_ = false;
     }
 
+    // Without this a present-but-wedged keyboard burns four blocking reads on
+    // every single frame, which at streaming rates starves everything else.
+    void defer_retry() {
+        next_retry_ = std::chrono::steady_clock::now() + kBackendRetryDelay;
+    }
+
     hid_device* device_ = nullptr;
     bool prepared_ = false;
+    std::chrono::steady_clock::time_point next_retry_{};
 };
 
 class MM700Backend {
@@ -501,6 +552,40 @@ public:
         return true;
     }
 
+    bool set_colors(const std::array<Color, 3>& colors) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now < next_retry_) {
+            return false;
+        }
+        if (!prepare()) {
+            reset(false);
+            defer_retry();
+            return false;
+        }
+        constexpr std::array<unsigned char, 2> write_color{0x06, 0x00};
+        std::array<unsigned char, 20> payload{};
+        payload[0] = 9;
+        for (std::size_t zone = 0; zone < colors.size(); ++zone) {
+            payload[4 + zone] = colors[zone].red;
+            payload[7 + zone] = colors[zone].green;
+            payload[10 + zone] = colors[zone].blue;
+        }
+        if (!transfer(
+                write_color.data(),
+                write_color.size(),
+                payload.data(),
+                payload.size())) {
+            reset(false);
+            defer_retry();
+            return false;
+        }
+        // A colour write keeps the device awake, so it counts as a heartbeat.
+        // Without this the 20s timer keeps firing an extra write+read into the
+        // middle of a stream.
+        last_heartbeat_ = now;
+        return true;
+    }
+
 private:
     bool open() {
         hid_device_info* devices = hid_enumerate(kCorsairVendor, kMM700Product);
@@ -534,30 +619,6 @@ private:
         return prepared_;
     }
 
-    bool set_colors(const std::array<Color, 3>& colors) {
-        if (!prepare()) {
-            reset(false);
-            return false;
-        }
-        constexpr std::array<unsigned char, 2> write_color{0x06, 0x00};
-        std::array<unsigned char, 20> payload{};
-        payload[0] = 9;
-        for (std::size_t zone = 0; zone < colors.size(); ++zone) {
-            payload[4 + zone] = colors[zone].red;
-            payload[7 + zone] = colors[zone].green;
-            payload[10 + zone] = colors[zone].blue;
-        }
-        if (!transfer(
-                write_color.data(),
-                write_color.size(),
-                payload.data(),
-                payload.size())) {
-            reset(false);
-            return false;
-        }
-        return true;
-    }
-
     bool transfer(
         const unsigned char* endpoint,
         std::size_t endpoint_size,
@@ -576,7 +637,8 @@ private:
             return false;
         }
         std::array<unsigned char, 64> response{};
-        return hid_read_timeout(device_, response.data(), response.size(), 500) > 0;
+        return hid_read_timeout(
+                   device_, response.data(), response.size(), kHidReadTimeoutMs) > 0;
     }
 
     void reset(bool restore_hardware) {
@@ -592,9 +654,14 @@ private:
         prepared_ = false;
     }
 
+    void defer_retry() {
+        next_retry_ = std::chrono::steady_clock::now() + kBackendRetryDelay;
+    }
+
     hid_device* device_ = nullptr;
     bool prepared_ = false;
     std::chrono::steady_clock::time_point last_heartbeat_{};
+    std::chrono::steady_clock::time_point next_retry_{};
 };
 
 class G560Backend {
@@ -615,7 +682,12 @@ public:
             return false;
         }
         device_ = hid_open_path(path.c_str());
-        return device_ != nullptr;
+        if (device_ == nullptr) {
+            return false;
+        }
+        // Replies are never inspected, so blocking on them only adds latency.
+        hid_set_nonblocking(device_, 1);
+        return true;
     }
 
     ~G560Backend() {
@@ -629,7 +701,12 @@ public:
     }
 
     bool set_colors(const std::array<Color, 4>& colors) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now < next_retry_) {
+            return false;
+        }
         if (device_ == nullptr && !open()) {
+            defer_retry();
             return false;
         }
         for (int zone = 0; zone < 4; ++zone) {
@@ -641,6 +718,8 @@ public:
                 direct[3] = 0xca;
                 direct[4] = static_cast<unsigned char>(zone);
                 if (!write_report(direct)) {
+                    reset();
+                    defer_retry();
                     return false;
                 }
                 prepared_[static_cast<std::size_t>(zone)] = true;
@@ -659,6 +738,8 @@ public:
             report[8] = color.blue;
             report[9] = 0x02;
             if (!write_report(report)) {
+                reset();
+                defer_retry();
                 return false;
             }
         }
@@ -670,16 +751,41 @@ private:
         for (int attempt = 0; attempt < 3; ++attempt) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             if (hid_write(device_, report.data(), report.size()) > 0) {
-                std::array<unsigned char, 33> response{};
-                hid_read_timeout(device_, response.data(), response.size(), 100);
+                drain();
                 return true;
             }
         }
         return false;
     }
 
+    // The device answers every report and the answers are not used. Discard
+    // whatever is already queued instead of waiting for it: a G560 that accepts
+    // writes but stops replying used to cost 100ms per zone, every frame.
+    void drain() {
+        std::array<unsigned char, 33> response{};
+        for (int packet = 0; packet < 8; ++packet) {
+            if (hid_read(device_, response.data(), response.size()) <= 0) {
+                return;
+            }
+        }
+    }
+
+    void reset() {
+        if (device_ == nullptr) {
+            return;
+        }
+        hid_close(device_);
+        device_ = nullptr;
+        prepared_.fill(false);
+    }
+
+    void defer_retry() {
+        next_retry_ = std::chrono::steady_clock::now() + kBackendRetryDelay;
+    }
+
     hid_device* device_ = nullptr;
     std::array<bool, 4> prepared_{};
+    std::chrono::steady_clock::time_point next_retry_{};
 };
 
 class ScimitarInputMapper {
@@ -896,7 +1002,8 @@ private:
             return false;
         }
         std::array<unsigned char, 64> response{};
-        return hid_read_timeout(device_, response.data(), response.size(), 500) > 0;
+        return hid_read_timeout(
+                   device_, response.data(), response.size(), kHidReadTimeoutMs) > 0;
     }
 
     void defer_retry() {
@@ -917,6 +1024,26 @@ struct ApplyResult {
     bool scimitar;
 };
 
+struct Backends {
+    K70Backend& k70;
+    MM700Backend& mm700;
+    G560Backend& g560;
+    ScimitarBackend& scimitar;
+};
+
+// Which devices the local renderer still owns. A device being streamed from the
+// PC is masked out so the two sources never fight over the same hardware.
+struct DeviceMask {
+    bool k70;
+    bool mm700;
+    bool g560;
+    bool scimitar;
+
+    static DeviceMask all() {
+        return {true, true, true, true};
+    }
+};
+
 enum class AgentEffect {
     Static,
     Watercolor,
@@ -925,25 +1052,23 @@ enum class AgentEffect {
 };
 
 ApplyResult apply_color(
-    K70Backend& k70,
-    MM700Backend& mm700,
-    G560Backend& g560,
-    ScimitarBackend& scimitar,
-    Color color) {
+    Backends& backends,
+    Color color,
+    DeviceMask mask,
+    ApplyResult previous) {
     return {
-        k70.set_color(color),
-        mm700.set_color(color),
-        g560.set_color(color),
-        scimitar.set_color(color),
+        mask.k70 ? backends.k70.set_color(color) : previous.k70,
+        mask.mm700 ? backends.mm700.set_color(color) : previous.mm700,
+        mask.g560 ? backends.g560.set_color(color) : previous.g560,
+        mask.scimitar ? backends.scimitar.set_color(color) : previous.scimitar,
     };
 }
 
 ApplyResult apply_watercolor(
-    K70Backend& k70,
-    MM700Backend& mm700,
-    G560Backend& g560,
-    ScimitarBackend& scimitar,
-    double elapsed) {
+    Backends& backends,
+    double elapsed,
+    DeviceMask mask,
+    ApplyResult previous) {
     std::array<Color, 4> g560_colors{};
     for (std::size_t zone = 0; zone < g560_colors.size(); ++zone) {
         g560_colors[zone] = watercolor_color(0.28 + zone * 0.29, elapsed);
@@ -953,19 +1078,19 @@ ApplyResult apply_watercolor(
         scimitar_colors[zone] = watercolor_color(0.49 + zone * 0.24, elapsed);
     }
     return {
-        k70.set_watercolor(elapsed),
-        mm700.set_watercolor(elapsed),
-        g560.set_colors(g560_colors),
-        scimitar.set_colors(scimitar_colors),
+        mask.k70 ? backends.k70.set_watercolor(elapsed) : previous.k70,
+        mask.mm700 ? backends.mm700.set_watercolor(elapsed) : previous.mm700,
+        mask.g560 ? backends.g560.set_colors(g560_colors) : previous.g560,
+        mask.scimitar ? backends.scimitar.set_colors(scimitar_colors)
+                      : previous.scimitar,
     };
 }
 
 ApplyResult apply_stranger(
-    K70Backend& k70,
-    MM700Backend& mm700,
-    G560Backend& g560,
-    ScimitarBackend& scimitar,
-    double elapsed) {
+    Backends& backends,
+    double elapsed,
+    DeviceMask mask,
+    ApplyResult previous) {
     std::array<Color, 4> g560_colors{};
     for (std::size_t zone = 0; zone < g560_colors.size(); ++zone) {
         g560_colors[zone] = stranger_things_color(
@@ -981,19 +1106,19 @@ ApplyResult apply_stranger(
             24 + static_cast<int>(zone));
     }
     return {
-        k70.set_stranger(elapsed),
-        mm700.set_stranger(elapsed),
-        g560.set_colors(g560_colors),
-        scimitar.set_colors(scimitar_colors),
+        mask.k70 ? backends.k70.set_stranger(elapsed) : previous.k70,
+        mask.mm700 ? backends.mm700.set_stranger(elapsed) : previous.mm700,
+        mask.g560 ? backends.g560.set_colors(g560_colors) : previous.g560,
+        mask.scimitar ? backends.scimitar.set_colors(scimitar_colors)
+                      : previous.scimitar,
     };
 }
 
 ApplyResult apply_borderlands4(
-    K70Backend& k70,
-    MM700Backend& mm700,
-    G560Backend& g560,
-    ScimitarBackend& scimitar,
-    double elapsed) {
+    Backends& backends,
+    double elapsed,
+    DeviceMask mask,
+    ApplyResult previous) {
     std::array<Color, 4> g560_colors{};
     for (std::size_t zone = 0; zone < g560_colors.size(); ++zone) {
         g560_colors[zone] = borderlands4_color(
@@ -1009,10 +1134,11 @@ ApplyResult apply_borderlands4(
             24 + static_cast<int>(zone));
     }
     return {
-        k70.set_borderlands4(elapsed),
-        mm700.set_borderlands4(elapsed),
-        g560.set_colors(g560_colors),
-        scimitar.set_colors(scimitar_colors),
+        mask.k70 ? backends.k70.set_borderlands4(elapsed) : previous.k70,
+        mask.mm700 ? backends.mm700.set_borderlands4(elapsed) : previous.mm700,
+        mask.g560 ? backends.g560.set_colors(g560_colors) : previous.g560,
+        mask.scimitar ? backends.scimitar.set_colors(scimitar_colors)
+                      : previous.scimitar,
     };
 }
 
@@ -1032,18 +1158,17 @@ const char* effect_name(AgentEffect effect) {
 
 ApplyResult apply_effect(
     AgentEffect effect,
-    K70Backend& k70,
-    MM700Backend& mm700,
-    G560Backend& g560,
-    ScimitarBackend& scimitar,
-    double elapsed) {
+    Backends& backends,
+    double elapsed,
+    DeviceMask mask,
+    ApplyResult previous) {
     if (effect == AgentEffect::Watercolor) {
-        return apply_watercolor(k70, mm700, g560, scimitar, elapsed);
+        return apply_watercolor(backends, elapsed, mask, previous);
     }
     if (effect == AgentEffect::StrangerThings) {
-        return apply_stranger(k70, mm700, g560, scimitar, elapsed);
+        return apply_stranger(backends, elapsed, mask, previous);
     }
-    return apply_borderlands4(k70, mm700, g560, scimitar, elapsed);
+    return apply_borderlands4(backends, elapsed, mask, previous);
 }
 
 std::string result_line(Color color, ApplyResult result) {
@@ -1072,7 +1197,7 @@ std::string effect_result_line(const std::string& effect, ApplyResult result) {
     return output.str();
 }
 
-int create_server() {
+int create_listener(int port, int backlog) {
     const int server = socket(AF_INET, SOCK_STREAM, 0);
     if (server < 0) {
         return -1;
@@ -1081,15 +1206,269 @@ int create_server() {
     setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled));
     sockaddr_in address{};
     address.sin_family = AF_INET;
-    address.sin_port = htons(kListenPort);
+    address.sin_port = htons(static_cast<uint16_t>(port));
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (bind(server, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0 ||
-        listen(server, 4) < 0) {
+        listen(server, backlog) < 0) {
         close(server);
         return -1;
     }
+    // Accepting in a loop needs a non-blocking listener. On Darwin the accepted
+    // socket does not inherit this flag, so the blocking recv on the control
+    // port keeps working unchanged.
+    const int flags = fcntl(server, F_GETFL, 0);
+    if (flags >= 0) {
+        fcntl(server, F_SETFL, flags | O_NONBLOCK);
+    }
     return server;
 }
+
+// Receives per-LED frames from the SignalRGB bridge plugin and hands the newest
+// one per device to the HID backends.
+//
+// Three properties matter here. Frames are coalesced into a single-slot mailbox
+// per device, so a device that cannot keep up drops frames instead of building a
+// backlog. Writes are paced per device, so a fast sender cannot push the K70
+// past its four blocking round trips. And every device falls back to the local
+// renderer once its frames stop arriving.
+class StreamServer {
+    // One frame per device, latest wins. Overwriting a still-pending frame is
+    // the coalescing, so the backlog is one frame deep by construction.
+    struct Target {
+        std::array<Color, stream::kMaxLedCount> colors{};
+        bool pending = false;
+        bool streaming = false;
+        std::chrono::steady_clock::time_point deadline{};
+        std::chrono::steady_clock::time_point next_write{};
+    };
+
+    struct Connection {
+        int fd = -1;
+        std::vector<unsigned char> buffer;
+        std::chrono::steady_clock::time_point last_activity{};
+    };
+
+public:
+    ~StreamServer() {
+        close_all();
+    }
+
+    bool start() {
+        listener_ = create_listener(kStreamPort, static_cast<int>(kMaxStreamClients));
+        return listener_ >= 0;
+    }
+
+    bool has_clients() const {
+        return !connections_.empty();
+    }
+
+    void add_fds(fd_set& read_set, int& max_fd) const {
+        if (listener_ < 0) {
+            return;
+        }
+        FD_SET(listener_, &read_set);
+        max_fd = std::max(max_fd, listener_);
+        for (const Connection& connection : connections_) {
+            FD_SET(connection.fd, &read_set);
+            max_fd = std::max(max_fd, connection.fd);
+        }
+    }
+
+    // Network only: never touches HID, so a burst of frames cannot delay the
+    // device writes or the Scimitar input poll.
+    void service(const fd_set& read_set, std::chrono::steady_clock::time_point now) {
+        if (listener_ < 0) {
+            return;
+        }
+        if (FD_ISSET(listener_, &read_set)) {
+            accept_pending(now);
+        }
+        for (std::size_t index = connections_.size(); index-- > 0;) {
+            Connection& connection = connections_[index];
+            if (!FD_ISSET(connection.fd, &read_set)) {
+                if (now - connection.last_activity > kStreamIdleReap) {
+                    drop(index);
+                }
+                continue;
+            }
+            if (!drain(connection, now)) {
+                drop(index);
+            }
+        }
+    }
+
+    DeviceMask local_mask() const {
+        return {
+            !targets_[0].streaming,
+            !targets_[1].streaming,
+            !targets_[2].streaming,
+            !targets_[3].streaming,
+        };
+    }
+
+    // Returns true when a device just fell back, so the caller knows to repaint
+    // it with the local effect or colour.
+    bool expire(std::chrono::steady_clock::time_point now) {
+        bool released = false;
+        for (Target& target : targets_) {
+            if (target.streaming && now >= target.deadline) {
+                target.streaming = false;
+                target.pending = false;
+                released = true;
+            }
+        }
+        return released;
+    }
+
+    // A command on the control port takes the devices back immediately, so the
+    // response line reflects writes that actually happened.
+    void clear_all() {
+        for (Target& target : targets_) {
+            target.streaming = false;
+            target.pending = false;
+        }
+    }
+
+    // Writes at most one frame per device, pumping the caller's callback between
+    // devices so a slow write cannot stall keyboard input.
+    template <typename Pump>
+    void flush(Backends& backends, Pump&& pump) {
+        for (std::size_t index = 0; index < stream::kDeviceCount; ++index) {
+            Target& target = targets_[index];
+            if (!target.pending) {
+                continue;
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (now < target.next_write) {
+                // Keep it pending: a newer frame will simply overwrite it.
+                continue;
+            }
+            write_device(backends, static_cast<stream::Device>(index), target);
+            target.pending = false;
+            target.next_write = std::chrono::steady_clock::now() + kStreamInterval[index];
+            pump();
+        }
+    }
+
+    void close_all() {
+        for (Connection& connection : connections_) {
+            close(connection.fd);
+        }
+        connections_.clear();
+        if (listener_ >= 0) {
+            close(listener_);
+            listener_ = -1;
+        }
+    }
+
+private:
+    void accept_pending(std::chrono::steady_clock::time_point now) {
+        while (true) {
+            const int client = accept(listener_, nullptr, nullptr);
+            if (client < 0) {
+                return;
+            }
+            if (connections_.size() >= kMaxStreamClients) {
+                // Never leave the listener readable and unserviced, or select
+                // spins at 100% CPU.
+                close(client);
+                continue;
+            }
+            const int flags = fcntl(client, F_GETFL, 0);
+            if (flags >= 0) {
+                fcntl(client, F_SETFL, flags | O_NONBLOCK);
+            }
+            Connection connection;
+            connection.fd = client;
+            connection.last_activity = now;
+            connections_.push_back(std::move(connection));
+        }
+    }
+
+    bool drain(Connection& connection, std::chrono::steady_clock::time_point now) {
+        std::array<unsigned char, 4096> scratch{};
+        std::size_t drained = 0;
+        while (drained < kStreamMaxDrainPerPass) {
+            const ssize_t count = recv(connection.fd, scratch.data(), scratch.size(), 0);
+            if (count == 0) {
+                return false;
+            }
+            if (count < 0) {
+                // EINTR is retried on the next pass rather than here, so a
+                // repeating signal cannot spin this loop.
+                if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                    break;
+                }
+                return false;
+            }
+            drained += static_cast<std::size_t>(count);
+            connection.buffer.insert(
+                connection.buffer.end(),
+                scratch.begin(),
+                scratch.begin() + static_cast<std::ptrdiff_t>(count));
+            connection.last_activity = now;
+            stream::feed(connection.buffer, [this, now](stream::FrameView frame) {
+                store(frame, now);
+            });
+            if (static_cast<std::size_t>(count) < scratch.size()) {
+                break;
+            }
+        }
+        return true;
+    }
+
+    // Overwriting a still-pending frame is the coalescing: the backlog is one
+    // frame deep by construction.
+    void store(stream::FrameView frame, std::chrono::steady_clock::time_point now) {
+        Target& target = targets_[static_cast<std::size_t>(frame.device)];
+        const std::size_t leds = stream::led_count(frame.device);
+        for (std::size_t led = 0; led < leds; ++led) {
+            target.colors[led] = Color{
+                frame.payload[led * 3],
+                frame.payload[led * 3 + 1],
+                frame.payload[led * 3 + 2],
+            };
+        }
+        target.pending = true;
+        target.streaming = true;
+        target.deadline = now + kStreamTimeout;
+    }
+
+    void write_device(Backends& backends, stream::Device device, const Target& target) {
+        switch (device) {
+            case stream::Device::K70: {
+                std::array<Color, kK70LedCoordinates.size()> frame{};
+                std::copy(target.colors.begin(), target.colors.end(), frame.begin());
+                backends.k70.set_frame(frame);
+                return;
+            }
+            case stream::Device::MM700:
+                backends.mm700.set_colors(
+                    {target.colors[0], target.colors[1], target.colors[2]});
+                return;
+            case stream::Device::G560:
+                backends.g560.set_colors(
+                    {target.colors[0],
+                     target.colors[1],
+                     target.colors[2],
+                     target.colors[3]});
+                return;
+            case stream::Device::Scimitar:
+                backends.scimitar.set_colors(
+                    {target.colors[0], target.colors[1], target.colors[2]});
+                return;
+        }
+    }
+
+    void drop(std::size_t index) {
+        close(connections_[index].fd);
+        connections_.erase(connections_.begin() + static_cast<std::ptrdiff_t>(index));
+    }
+
+    int listener_ = -1;
+    std::vector<Connection> connections_;
+    std::array<Target, stream::kDeviceCount> targets_{};
+};
 
 }  // namespace
 
@@ -1165,42 +1544,86 @@ int main(int argc, char** argv) {
               << (scimitar_mapping_ready ? "ready" : "unavailable")
               << std::endl;
     ScimitarBackend scimitar(scimitar_mapping_ready);
+    Backends backends{k70, mm700, g560, scimitar};
     const auto effect_seconds = []() {
         return std::chrono::duration<double>(
             std::chrono::system_clock::now().time_since_epoch()).count();
     };
-    ApplyResult last_result = effect == AgentEffect::Static
-        ? apply_color(k70, mm700, g560, scimitar, current)
-        : apply_effect(effect, k70, mm700, g560, scimitar, effect_seconds());
+    ApplyResult last_result{};
+    last_result = effect == AgentEffect::Static
+        ? apply_color(backends, current, DeviceMask::all(), last_result)
+        : apply_effect(
+              effect, backends, effect_seconds(), DeviceMask::all(), last_result);
     std::cout << (effect == AgentEffect::Static
         ? result_line(current, last_result)
         : effect_result_line(effect_name(effect), last_result));
 
-    const int server = create_server();
+    const int server = create_listener(kListenPort, 4);
     if (server < 0) {
         std::cerr << "could not listen on 127.0.0.1:" << kListenPort << std::endl;
         return 3;
     }
     std::cout << "listening=127.0.0.1:" << kListenPort << std::endl;
 
+    // A missing stream port must not be fatal: the plist restarts the agent on
+    // exit, so a stale process holding 7532 would otherwise take the working
+    // control port down with it in a restart loop.
+    StreamServer stream;
+    if (stream.start()) {
+        std::cout << "streaming=127.0.0.1:" << kStreamPort << std::endl;
+    } else {
+        std::cerr << "could not listen on 127.0.0.1:" << kStreamPort
+                  << "; SignalRGB streaming is unavailable" << std::endl;
+    }
+
+    const auto pump = [&]() {
+        return !scimitar_mapping_ready || scimitar_input.poll();
+    };
+    auto next_effect_frame =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(83);
+    bool local_refresh_due = false;
+
     while (running.load()) {
         fd_set read_set;
         FD_ZERO(&read_set);
         FD_SET(server, &read_set);
-        timeval timeout{0, 20000};
-        const int ready = select(server + 1, &read_set, nullptr, nullptr, &timeout);
+        int max_fd = server;
+        stream.add_fds(read_set, max_fd);
+        // Poll faster while frames are arriving; idle behaviour is unchanged.
+        timeval timeout{0, stream.has_clients() ? 5000 : 20000};
+        const int ready = select(max_fd + 1, &read_set, nullptr, nullptr, &timeout);
+        const auto loop_now = std::chrono::steady_clock::now();
+
+        // Also runs on a bare timeout: select clears the set, so this pass only
+        // reaps connections that have gone quiet.
+        if (ready >= 0) {
+            stream.service(read_set, loop_now);
+        }
+        // Expire before rendering so a device that just lapsed is relit in this
+        // same pass instead of waiting for the next one.
+        if (stream.expire(loop_now)) {
+            local_refresh_due = true;
+        }
+
         if (ready > 0 && FD_ISSET(server, &read_set)) {
             const int client = accept(server, nullptr, nullptr);
             if (client >= 0) {
-                timeval receive_timeout{2, 0};
-                setsockopt(
-                    client,
-                    SOL_SOCKET,
-                    SO_RCVTIMEO,
-                    &receive_timeout,
-                    sizeof(receive_timeout));
+                // Over an SSH tunnel the local end accepts immediately while the
+                // command is still crossing the network, so the data routinely
+                // arrives after accept() returns. A short receive timeout drops
+                // those commands intermittently, which is why this waits up to
+                // two seconds, matching the agent's long-standing behaviour.
+                // The cost is unchanged from before: a client that connects and
+                // never speaks stalls this loop for that window.
                 std::array<char, 128> buffer{};
-                const ssize_t count = recv(client, buffer.data(), buffer.size() - 1, 0);
+                ssize_t count = -1;
+                fd_set command_set;
+                FD_ZERO(&command_set);
+                FD_SET(client, &command_set);
+                timeval command_timeout{2, 0};
+                if (select(client + 1, &command_set, nullptr, nullptr, &command_timeout) > 0) {
+                    count = recv(client, buffer.data(), buffer.size() - 1, 0);
+                }
                 std::string response = "ERROR command\n";
                 if (count > 0) {
                     std::string command(buffer.data(), static_cast<std::size_t>(count));
@@ -1213,45 +1636,47 @@ int main(int argc, char** argv) {
                         if (parse_color(command.substr(6), requested)) {
                             effect = AgentEffect::Static;
                             current = requested;
+                            // An operator command wins over the stream, so every
+                            // ok in the response is a write that really happened.
+                            stream.clear_all();
                             last_result = apply_color(
-                                k70,
-                                mm700,
-                                g560,
-                                scimitar,
-                                current);
+                                backends,
+                                current,
+                                DeviceMask::all(),
+                                last_result);
                             response = result_line(current, last_result);
                         } else {
                             response = "ERROR color\n";
                         }
                     } else if (command == "EFFECT WATERCOLOR") {
                         effect = AgentEffect::Watercolor;
+                        stream.clear_all();
                         last_result = apply_effect(
                             effect,
-                            k70,
-                            mm700,
-                            g560,
-                            scimitar,
-                            effect_seconds());
+                            backends,
+                            effect_seconds(),
+                            DeviceMask::all(),
+                            last_result);
                         response = effect_result_line(effect_name(effect), last_result);
                     } else if (command == "EFFECT STRANGER-THINGS") {
                         effect = AgentEffect::StrangerThings;
+                        stream.clear_all();
                         last_result = apply_effect(
                             effect,
-                            k70,
-                            mm700,
-                            g560,
-                            scimitar,
-                            effect_seconds());
+                            backends,
+                            effect_seconds(),
+                            DeviceMask::all(),
+                            last_result);
                         response = effect_result_line(effect_name(effect), last_result);
                     } else if (command == "EFFECT BORDERLANDS-4") {
                         effect = AgentEffect::Borderlands4;
+                        stream.clear_all();
                         last_result = apply_effect(
                             effect,
-                            k70,
-                            mm700,
-                            g560,
-                            scimitar,
-                            effect_seconds());
+                            backends,
+                            effect_seconds(),
+                            DeviceMask::all(),
+                            last_result);
                         response = effect_result_line(effect_name(effect), last_result);
                     } else if (command == "STATUS") {
                         response = effect == AgentEffect::Static
@@ -1263,31 +1688,39 @@ int main(int argc, char** argv) {
                 close(client);
             }
         }
-        static auto next_effect_frame = std::chrono::steady_clock::now();
         const auto now = std::chrono::steady_clock::now();
-        if (effect != AgentEffect::Static && now >= next_effect_frame) {
-            last_result = apply_effect(
-                effect,
-                k70,
-                mm700,
-                g560,
-                scimitar,
-                effect_seconds());
+        if (now >= next_effect_frame) {
+            const DeviceMask mask = stream.local_mask();
+            if (effect != AgentEffect::Static) {
+                last_result = apply_effect(
+                    effect, backends, effect_seconds(), mask, last_result);
+            } else if (local_refresh_due) {
+                // Static mode never repaints on its own, so a device coming back
+                // from streaming would otherwise stay frozen on SignalRGB's last
+                // frame forever.
+                last_result = apply_color(backends, current, mask, last_result);
+            }
+            local_refresh_due = false;
             next_effect_frame = now + std::chrono::milliseconds(83);
         }
+
+        stream.flush(backends, pump);
+
         if (!scimitar.heartbeat_if_due()) {
             std::cerr << "scimitar heartbeat failed" << std::endl;
         }
         if (!mm700.heartbeat_if_due()) {
             std::cerr << "mm700 heartbeat failed" << std::endl;
         }
-        if (scimitar_mapping_ready && !scimitar_input.poll()) {
+        if (!pump()) {
             std::cerr << "scimitar input listener failed" << std::endl;
+            stream.close_all();
             close(server);
             return 5;
         }
     }
 
+    stream.close_all();
     close(server);
     return running.load() ? 4 : 0;
 }

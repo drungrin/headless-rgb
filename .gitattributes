@@ -1,0 +1,15 @@
+# Shell scripts, the macOS plist template and C/C++ sources must stay LF: they
+# are consumed on Linux and macOS, and a CRLF shebang breaks the script outright.
+# Without this, a Windows checkout with core.autocrlf=true silently rewrites them.
+*.sh text eol=lf
+*.in text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.py text eol=lf
+*.js text eol=lf
+*.qml text eol=lf
+*.md text eol=lf
+*.rules text eol=lf
+
+# PowerShell is Windows-side; CRLF is fine and expected there.
+*.ps1 text eol=crlf

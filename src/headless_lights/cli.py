@@ -16,6 +16,12 @@ from headless_lights.beelight import protocol
 from headless_lights.effects import hold_effect, preview_effect
 from headless_lights.hub import hold_hub_color
 from headless_lights.mac import DEFAULT_MAC_HOST, send_agent_command
+from headless_lights.macstream import (
+    DEFAULT_STREAM_HOST,
+    DEFAULT_STREAM_PORT,
+    Device,
+    stream_hold,
+)
 from headless_lights.ram import set_corsair_memory_color
 from headless_lights.service import (
     hold_color,
@@ -85,6 +91,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mac_effect.add_argument("--host", default=DEFAULT_MAC_HOST)
     mac_effect.add_argument("--ssh-timeout", type=float, default=10.0)
+
+    mac_stream = subparsers.add_parser(
+        "mac-stream",
+        help="stream per-LED frames to the Mac agent, without SignalRGB",
+    )
+    mac_stream_source = mac_stream.add_mutually_exclusive_group(required=True)
+    mac_stream_source.add_argument("--color", help="RRGGBB or #RRGGBB")
+    mac_stream_source.add_argument(
+        "--effect", choices=("watercolor", "stranger-things", "borderlands-4")
+    )
+    mac_stream.add_argument("--host", default=DEFAULT_STREAM_HOST)
+    mac_stream.add_argument("--port", type=int, default=DEFAULT_STREAM_PORT)
+    mac_stream.add_argument("--fps", type=int, default=20)
+    mac_stream.add_argument(
+        "--seconds", type=float, help="stop after this long (runs forever by default)"
+    )
+    mac_stream.add_argument(
+        "--device",
+        action="append",
+        choices=[device.name.lower() for device in Device],
+        help="limit streaming to one device; repeatable",
+    )
 
     ram_color = subparsers.add_parser(
         "ram-color",
@@ -216,6 +244,20 @@ def main(argv: Sequence[str] | None = None) -> None:
                     host=args.host,
                     timeout=args.ssh_timeout,
                 )
+            )
+            return
+        if args.action == "mac-stream":
+            devices = (
+                [Device[name.upper()] for name in args.device] if args.device else None
+            )
+            stream_hold(
+                host=args.host,
+                port=args.port,
+                fps=args.fps,
+                seconds=args.seconds,
+                color=protocol.parse_color(args.color) if args.color else None,
+                effect=args.effect,
+                devices=devices,
             )
             return
         if args.action == "ram-color":
