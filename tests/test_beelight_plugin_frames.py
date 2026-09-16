@@ -118,6 +118,38 @@ class BeelightPluginTests(unittest.TestCase):
             for index in range(count)
         ]
 
+    # -- plugin metadata ----------------------------------------------------
+
+    def test_device_type_is_one_signalrgb_accepts(self) -> None:
+        """An unknown DeviceType kills the plugin before Initialize() runs.
+
+        Read out of DiscoverableDevice::StringToType in SignalRgb.exe. "ledstrip"
+        looks right and is not in the list; it cost a full bring-up cycle.
+        """
+        accepted = {
+            "keyboard", "mouse", "gpu", "dongle", "motherboard",
+            "lightingcontroller", "headphones", "lcd", "wifi", "microphone",
+            "aio", "ram", "case", "speakers", "mousepad", "other",
+        }
+        self.assertIn(self.dump["metadata"]["deviceType"], accepted)
+
+    def test_plugin_identifies_the_strip(self) -> None:
+        metadata = self.dump["metadata"]
+        self.assertEqual(metadata["type"], "serial")
+        self.assertEqual(metadata["vendorId"], 0x2E3C)
+        self.assertEqual(metadata["productId"], 0x5740)
+
+    def test_no_validate_hook_on_a_single_function_cdc_device(self) -> None:
+        """The strip's instance path carries no &MI_xx, so there is nothing to
+        select; exporting Validate() would stop SignalRGB matching the port."""
+        self.assertFalse(self.dump["metadata"]["hasValidate"])
+
+    def test_the_documented_settings_are_the_ones_exposed(self) -> None:
+        self.assertEqual(
+            self.dump["metadata"]["parameters"],
+            ["LightingMode", "forcedColor", "shutdownColor"],
+        )
+
     # -- protocol vectors ---------------------------------------------------
 
     def test_js_decodes_the_vendor_firmware_frame(self) -> None:
@@ -297,15 +329,25 @@ class BeelightPluginTests(unittest.TestCase):
             self.assertEqual(set(self._pixels(frame)), {(0x12, 0x34, 0x56)})
         self.assertFalse(shutdown["isOpen"], "COM3 must not stay held")
 
-    def test_a_silent_device_fails_initialization_but_still_publishes_leds(self) -> None:
+    def test_a_failed_handshake_never_reports_failure_to_the_engine(self) -> None:
+        """Returning false makes SignalRGB tear the device down mid-retry.
+
+        Measured on the strip: the first handshake lost its PC-mode
+        acknowledgement, Render() recovered 2.8 s later, and the device had
+        already been stopped. Recovery has to happen with the device alive.
+        """
+        for scenario in ("silentDevice", "connectFailure"):
+            self.assertTrue(
+                self.dump[scenario]["initialized"], f"{scenario} must stay alive"
+            )
+
+    def test_a_silent_device_still_publishes_leds(self) -> None:
         silent = self.dump["silentDevice"]
-        self.assertFalse(silent["initialized"])
         self.assertEqual(silent["ledCount"], 33, "fall back to the known layout")
         self.assertTrue(any("firmware" in line for line in silent["logs"]), silent["logs"])
 
     def test_a_port_that_will_not_open_never_writes(self) -> None:
         failure = self.dump["connectFailure"]
-        self.assertFalse(failure["initialized"])
         self.assertEqual(failure["writes"], [])
         self.assertTrue(any("connect" in line for line in failure["logs"]))
 

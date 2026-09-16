@@ -77,6 +77,19 @@ function snapshot(session, extra = {}) {
 
 const output = {};
 
+output.metadata = {
+	name: plugin.Name(),
+	type: plugin.Type(),
+	deviceType: plugin.DeviceType(),
+	vendorId: plugin.VendorId(),
+	productId: plugin.ProductId(),
+	size: plugin.Size(),
+	// A single-function CDC device has no interface to select, so the plugin
+	// must not export Validate(); SignalRGB would never match the port.
+	hasValidate: typeof plugin.Validate === "function",
+	parameters: plugin.ControllableParameters().map((entry) => entry.property),
+};
+
 // --- handshake -------------------------------------------------------------
 {
 	const session = start();

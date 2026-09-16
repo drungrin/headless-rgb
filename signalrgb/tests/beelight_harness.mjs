@@ -117,7 +117,14 @@ export function installGlobals({
 		setFrameRateTarget(value) { this.frameRateTargets.push(value); },
 		setImageFromUrl() {},
 		addFeature() {},
-		log(message) { logs.push(String(message)); },
+		// Anything worth logging must reach the log file, so the second
+		// argument is part of the contract, not decoration.
+		log(message, options) {
+			if (!options || options.toFile !== true) {
+				throw new Error(`device.log without toFile: ${message}`);
+			}
+			logs.push(String(message));
+		},
 		color(x, y) { return canvas(x, y); },
 	};
 
