@@ -21,8 +21,8 @@ iCUE, and no graphical session required on the Linux side.
 - Automatic Scimitar wireless recovery after a disconnect or timeout.
 - Two SignalRGB add-ons: one streams the Windows canvas to the Mac peripherals
   per LED, the other drives the Beelight strip straight from Windows.
-- SignalRGB builds of the Watercolor Spectrum and Borderlands 4 effects, in the
-  same clock phase as the Linux and macOS renderers.
+- SignalRGB builds of all three effects, in the same clock phase as the Linux
+  and macOS renderers.
 
 This project controls lighting only. It never changes fan speeds, thermal curves
 or any other cooling parameter.
@@ -168,7 +168,7 @@ animations stay aligned.
 | Effect | Description |
 | --- | --- |
 | `watercolor` | Soft bands of cyan, blue, violet, magenta, pink and pale yellow (also available inside SignalRGB) |
-| `stranger-things` | Blue/purple base with red rain and waves, plus periodic flashes |
+| `stranger-things` | Blue/purple base with red rain and waves, plus periodic flashes (also available inside SignalRGB) |
 | `borderlands-4` | Continuous red, orange and gold layers (also available inside SignalRGB) |
 
 Run a temporary preview:
@@ -285,16 +285,16 @@ The frame format is documented in [`mac-agent/README.md`](mac-agent/README.md).
 
 ### The effects inside SignalRGB
 
-Watercolor Spectrum and Borderlands 4 also exist as SignalRGB effects, so the
-strip and the Mac peripherals can be painted from Windows without giving up the
-look. They are plain HTML files — SignalRGB effects are not add-ons and need no
-repository:
+All three effects also exist as SignalRGB effects, so the strip and the Mac
+peripherals can be painted from Windows without giving up the look. They are
+plain HTML files — SignalRGB effects are not add-ons and need no repository:
 
 ```bash
 python tools/sync_addon.py effects ~/Documents/WhirlwindFX/Effects
 ```
 
-Restart SignalRGB and pick **Watercolor Spectrum** or **Borderlands 4**.
+Restart SignalRGB and pick **Watercolor Spectrum**, **Borderlands 4** or
+**Stranger Things**.
 
 Both take their phase from the wall clock, exactly as `effects.py` does, so all
 three renderers agree on what the colour should be at a given instant. The
@@ -313,13 +313,25 @@ the next begins:
 default is a starting point to tune, not a constant. The
 [canvas layouts](#canvas-layouts) below each come with the values that suit them.
 
-Borderlands 4 has a third setting, **Lanes** (default `6`). The Linux and macOS
-renderers pass each zone a *lane* — a small integer that shifts the red pulse and
-both waves, so the zones do not beat in unison. A canvas effect cannot look up
-which device it is painting, so it derives the lane from vertical position the
-way the K70 does (`lane = round(y * 5)`) and paints one gradient band per lane.
-Raising Lanes makes the variation finer; setting it to `1` removes it and the
-whole canvas pulses together.
+Borderlands 4 and Stranger Things have a third setting, **Lanes** (default `6`).
+The Linux and macOS renderers pass each zone a *lane* — a small integer that
+shifts the pulses and waves, so the zones do not beat in unison. A canvas effect
+cannot look up which device it is painting, so it derives the lane from vertical
+position the way the K70 does (`lane = round(y * 5)`) and paints one gradient
+band per lane. Raising Lanes makes the variation finer; setting it to `1` removes
+it and the whole canvas pulses together.
+
+Stranger Things has a fourth, **Rain Detail** (default `320`), and one honest
+limitation behind it. Its two rain layers run at 7× and 11× the position
+frequency, and the narrower peak is about 0.004 position units wide — under one
+pixel on the 320-wide canvas at the default Spread. No canvas effect can carry
+that: on Linux the function is sampled once per LED, here it is sampled once per
+canvas pixel and the devices then sample the canvas. The slow layers — the
+purple base, the red waves and the flash — are exact either way; the rain reads
+as a sparkle whose grain depends on Spread rather than as the same drops the
+per-LED renderers produce. Lowering Spread widens it. `320` is one stop per
+canvas pixel, the finest the canvas can carry; lower it only if the frame rate
+ever suffers, which it did not here.
 
 ### Asiahorse strip inside SignalRGB
 
