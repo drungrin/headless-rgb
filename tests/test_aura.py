@@ -33,7 +33,7 @@ class AuraTests(unittest.TestCase):
         resize_command = run.call_args_list[1].args[0]
         color_command = run.call_args_list[2].args[0]
         self.assertEqual(resize_command[resize_command.index("--zone") + 1], "2")
-        self.assertEqual(resize_command[resize_command.index("--size") + 1], "24")
+        self.assertEqual(resize_command[resize_command.index("--size") + 1], "26")
         self.assertNotIn("--size", color_command)
         self.assertIn("0000FF", color_command)
 

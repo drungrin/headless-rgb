@@ -21,6 +21,8 @@ iCUE, and no graphical session required on the Linux side.
 - Automatic Scimitar wireless recovery after a disconnect or timeout.
 - Two SignalRGB add-ons: one streams the Windows canvas to the Mac peripherals
   per LED, the other drives the Beelight strip straight from Windows.
+- A SignalRGB build of the Watercolor Spectrum effect, in the same clock phase
+  as the Linux and macOS renderers.
 
 This project controls lighting only. It never changes fan speeds, thermal curves
 or any other cooling parameter.
@@ -32,7 +34,7 @@ or any other cooling parameter.
 | Linux | Beelight V3/AT32 (`2e3c:5740`) | 33 pixels, direct serial protocol |
 | Windows | Beelight V3/AT32 (`2e3c:5740`) | the same strip, through the SignalRGB add-on |
 | Linux | Corsair Vengeance RGB DDR5 | 12 LEDs per module, through OpenRGB |
-| Linux | ASUS PRIME Z690-P Aura (`0b05:19af`) | Asiahorse Lightsaber-X, 24 LEDs on `Aura Addressable 2` |
+| Linux | ASUS PRIME Z690-P Aura (`0b05:19af`) | Asiahorse Lightsaber-X, 26 LEDs on `Aura Addressable 2` |
 | Linux | Corsair iCUE LINK System Hub (`1b1c:0c3f`) | six LX120/LX120-R/LX140-R fans, 18 LEDs per fan |
 | macOS | Corsair K70 MAX | 116 lit keys (142 hardware channels), direct HID |
 | macOS | Corsair MM700 RGB | 3 zones, direct HID |
@@ -48,7 +50,7 @@ are not guaranteed.
 | --- | --- |
 | `src/headless_lights/` | Python package and the `headless-lights` CLI |
 | `mac-agent/` | C++ agent for macOS, its wire protocol and its test suite |
-| `signalrgb/` | Canonical source of both SignalRGB add-ons, plus their test harnesses |
+| `signalrgb/` | Canonical source of both SignalRGB add-ons and the effect, plus their test harnesses |
 | `windows/` | SSH tunnel supervisor and the UDP-to-TCP bridge |
 | `tools/` | K70 layout generator, add-on sync and stream capture helpers |
 | `udev/` | udev rule scoping direct access to the identified controllers |
@@ -160,12 +162,12 @@ configured Aura zone.
 
 ### Animated effects
 
-Effects use Unix time as a shared phase, so the Linux and macOS animations stay
-aligned.
+Effects use Unix time as a shared phase, so the Linux, macOS and SignalRGB
+animations stay aligned.
 
 | Effect | Description |
 | --- | --- |
-| `watercolor` | Soft bands of cyan, blue, violet, magenta, pink and pale yellow |
+| `watercolor` | Soft bands of cyan, blue, violet, magenta, pink and pale yellow (also available inside SignalRGB) |
 | `stranger-things` | Blue/purple base with red rain and waves, plus periodic flashes |
 | `borderlands-4` | Continuous red, orange and gold layers |
 
@@ -281,6 +283,81 @@ headless-lights mac-stream --color ff6600 --device k70 --fps 30
 
 The frame format is documented in [`mac-agent/README.md`](mac-agent/README.md).
 
+### Watercolor inside SignalRGB
+
+The same Watercolor Spectrum also exists as a SignalRGB effect, so the strip and
+the Mac peripherals can be painted from Windows without giving up the look. It
+is a plain HTML file — SignalRGB effects are not add-ons and need no repository:
+
+```bash
+python tools/sync_addon.py effects ~/Documents/WhirlwindFX/Effects
+```
+
+Restart SignalRGB and pick **Watercolor Spectrum**.
+
+It takes its phase from the wall clock, exactly as `effects.py` does, so all
+three renderers agree on what the colour should be at a given instant. The
+practical payoff is the fallback: when streaming stops and the Mac returns to its
+own effect after three seconds, the peripherals do not jump.
+
+Two settings, because an effect cannot see where one device ends and the next
+begins:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| Spread | `25` | Palette cycles across the canvas, in tenths. Raise it until a keyboard-sized device shows about one full cycle. |
+| Downward Tilt | `17` | Tilt as a percentage of the horizontal span. `17` reproduces the K70's own `0.18 / 1.05` diagonal. |
+
+`Spread` depends on how large your devices are on the SignalRGB canvas, so the
+default is a starting point to tune, not a constant.
+
+### Asiahorse strip inside SignalRGB
+
+A motherboard's addressable header cannot report what is plugged into it, so
+SignalRGB leaves its ARGB channels empty until a **component** describes the
+strip. None of the Asiahorse components SignalRGB ships is the Lightsaber-X —
+they are fans and cables — so this repository carries one:
+
+```bash
+python tools/sync_addon.py components ~/Documents/WhirlwindFX/Components
+```
+
+Restart SignalRGB, open the **ASUS PRIME Z690-P** device, and assign
+**Asiahorse Lightsaber-X - 26 LEDs** to the addressable channel the strip is
+wired to. The board exposes three; the strip is on the second addressable
+header, which is `Aura Addressable 2` in OpenRGB terms.
+
+The LED count is the same 26 the Linux path uses
+(`headless_lights.aura.ASIAHORSE_LED_COUNT`), so both machines address the strip
+identically.
+
+### Canvas layouts
+
+SignalRGB stores everything in the registry as Qt QSettings, under
+`HKCU\Software\WhirlwindFX\SignalRgb`; a layout is one subkey of `layouts`
+holding a binary `@Variant(...)` blob per device. `tools/signalrgb_layout.py`
+writes them, because two of the arrangements here are computed rather than
+arranged by eye:
+
+```bash
+python tools/signalrgb_layout.py --list
+python tools/signalrgb_layout.py spectrum desk --dry-run
+python tools/signalrgb_layout.py spectrum desk     # SignalRGB must be closed
+```
+
+| Layout | What it is for | Watercolor settings |
+| --- | --- | --- |
+| **Spectrum** | Reproduces the Linux look. Each device is placed at the fraction of the canvas its palette offset in `effects.py` corresponds to, and sized to its span, so the devices show different parts of the spectrum at the same instant instead of all turning one colour together. | Spread 23, Tilt 0 |
+| **Desk** | Where the hardware actually is: the strip along the wall, the case on the right, the peripherals on the pad. One cycle across the room, so a device shows the share of the palette it physically occupies. | Spread 11, Tilt 26 |
+
+The tool never modifies an existing layout; it only creates new ones. Export
+`HKCU\Software\WhirlwindFX` first if you want a way back, and keep that file
+outside the repository — it carries account state.
+
+One limitation worth stating: a component is a straight line of LEDs, so the
+Asiahorse, which runs along the top of the motherboard and turns down the right
+side, is represented by its top run only.
+
 ### Beelight strip on Windows
 
 The strip plugs into the Windows PC, where it enumerates as a plain CDC serial
@@ -360,6 +437,10 @@ so a plugin and its device cannot drift apart silently:
   serial port, feeds it acknowledgements encoded by
   `headless_lights.beelight.protocol`, and decodes everything it writes back
   with that same module.
+- `tests/test_watercolor_effect.py` runs the effect against a fake canvas and
+  checks every gradient stop it produces against
+  `headless_lights.effects.watercolor_color` at the same instant, so the
+  SignalRGB and Python renderings cannot diverge.
 
 Without Node.js, those tests are skipped.
 

@@ -1,0 +1,141 @@
+<head>
+  <title>Watercolor Spectrum</title>
+
+  <meta description="Soft bands of cyan, blue, violet, magenta, pink and pale yellow, drifting slowly across the canvas. Phase-locked to the wall clock, so machines running the same effect stay in step." />
+  <meta publisher="headless-lights" />
+
+  <meta property="spread" label="Spread" type="number" min="5" max="60" default="25" />
+  <meta property="tilt" label="Downward Tilt" type="number" min="0" max="40" default="17" />
+</head>
+
+<body style="margin: 0; padding: 0; background: black">
+  <canvas id="exCanvas" width="320" height="200"></canvas>
+</body>
+
+<script>
+  // Watercolor Spectrum, ported from headless_lights.effects.watercolor_color.
+  //
+  // The same effect is rendered by the Python controller on the Linux PC and by
+  // the C++ agent on the Mac. All three take their phase from the Unix clock,
+  // so a device does not jump when the machine painting it changes. The
+  // cross-language tests in tests/test_watercolor_effect.py decode the gradient
+  // this file builds and compare every stop against the Python implementation,
+  // which is what keeps the three from drifting apart.
+
+  var c = document.getElementById("exCanvas");
+  var ctx = c.getContext("2d");
+  var width = 320;
+  var height = 200;
+
+  // effects.py WATERCOLOR_PALETTE
+  var PALETTE = [
+    [20, 222, 255],
+    [65, 137, 255],
+    [172, 91, 255],
+    [255, 48, 194],
+    [255, 153, 202],
+    [255, 244, 151],
+    [164, 255, 241],
+  ];
+
+  // Resolution of the gradient along its axis. One palette segment spans about
+  // 0.155 position units; 128 stops put roughly 13 of them inside each segment,
+  // so the linear interpolation the gradient does between stops is invisible.
+  var STOPS = 128;
+
+  // effects.py _smooth_mix
+  function smoothMix(left, right, amount) {
+    var weight = (1.0 - Math.cos(Math.PI * amount)) / 2.0;
+    return Math.round(left * (1.0 - weight) + right * weight);
+  }
+
+  // effects.py watercolor_color
+  function watercolorColor(position, elapsed) {
+    var phase = position * 0.92 + elapsed / 12.0;
+    phase += 0.055 * Math.sin(2.0 * Math.PI * (position * 0.43 - elapsed / 17.0));
+    phase += 0.018 * Math.sin(2.0 * Math.PI * (position * 1.71 + elapsed / 9.0));
+
+    // Python's % on floats always returns a non-negative result for a positive
+    // modulus; JavaScript's keeps the sign of the dividend, and elapsed is a
+    // Unix timestamp so phase is never negative in practice. Normalise anyway,
+    // so a negative stubbed clock in a test cannot index outside the palette.
+    var wrapped = phase % 1.0;
+    if (wrapped < 0) {
+      wrapped += 1.0;
+    }
+
+    var palettePosition = wrapped * PALETTE.length;
+    var leftIndex = Math.floor(palettePosition);
+    var amount = palettePosition - leftIndex;
+    var left = PALETTE[leftIndex];
+    var right = PALETTE[(leftIndex + 1) % PALETTE.length];
+
+    var wash =
+      0.035 +
+      (0.035 * (1.0 + Math.sin(2.0 * Math.PI * (position * 0.73 + elapsed / 13.0)))) / 2.0;
+
+    var color = [0, 0, 0];
+    for (var channel = 0; channel < 3; channel++) {
+      color[channel] = Math.round(
+        smoothMix(left[channel], right[channel], amount) * (1.0 - wash) + 255 * wash
+      );
+    }
+    return color;
+  }
+
+  // Horizontal span in position units, and the downward tilt over the canvas
+  // height. The K70's own mapping in macstream.py is x * 1.05 + y * 0.18, which
+  // is what the defaults reproduce.
+  function spanX() {
+    return spread / 10.0;
+  }
+
+  function spanY() {
+    return (spanX() * tilt) / 100.0;
+  }
+
+  function draw() {
+    var sx = spanX();
+    var sy = spanY();
+    var elapsed = Date.now() / 1000.0;
+
+    // position(x, y) = sx * x / width + sy * y / height is affine in (x, y), so
+    // the whole frame is one linear gradient. Its axis must be parallel to the
+    // gradient of that function, g = (sx / width, sy / height); scaling the
+    // axis by (sx + sy) / |g|^2 makes the gradient's own 0..1 parameter run
+    // from position 0 to position sx + sy, which is the canvas corner.
+    var gx = sx / width;
+    var gy = sy / height;
+    var squared = gx * gx + gy * gy;
+    var total = sx + sy;
+
+    var fill;
+    if (squared === 0) {
+      // spread at its minimum with no tilt cannot happen, but a zero-length
+      // gradient throws, so fall back to the single colour it would produce.
+      var flat = watercolorColor(0, elapsed);
+      fill = "rgb(" + flat[0] + ", " + flat[1] + ", " + flat[2] + ")";
+    } else {
+      var scale = total / squared;
+      fill = ctx.createLinearGradient(0, 0, gx * scale, gy * scale);
+      for (var stop = 0; stop <= STOPS; stop++) {
+        var offset = stop / STOPS;
+        var color = watercolorColor(offset * total, elapsed);
+        fill.addColorStop(
+          offset,
+          "rgb(" + color[0] + ", " + color[1] + ", " + color[2] + ")"
+        );
+      }
+    }
+
+    ctx.fillStyle = fill;
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  function update() {
+    draw();
+    window.requestAnimationFrame(update);
+  }
+
+  window.requestAnimationFrame(update);
+</script>
