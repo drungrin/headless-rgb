@@ -2,8 +2,8 @@
 
 A headless RGB controller for a desk split across three machines. It drives the
 lighting on a Linux PC directly, controls the peripherals attached to a Mac over
-an authenticated SSH connection, and lets SignalRGB on a Windows PC paint those
-Mac peripherals per LED.
+an authenticated SSH connection, and lets SignalRGB on a Windows PC paint both
+those Mac peripherals and the Beelight strip, per LED.
 
 It exists to keep lighting consistent without depending on a vendor GUI: no
 iCUE, and no graphical session required on the Linux side.
@@ -19,7 +19,8 @@ iCUE, and no graphical session required on the Linux side.
 - systemd user services for persistent static colour or effects.
 - A C++ macOS agent that drives peripherals over direct HID, without the iCUE SDK.
 - Automatic Scimitar wireless recovery after a disconnect or timeout.
-- A SignalRGB add-on that streams the Windows canvas to the Mac peripherals, per LED.
+- Two SignalRGB add-ons: one streams the Windows canvas to the Mac peripherals
+  per LED, the other drives the Beelight strip straight from Windows.
 
 This project controls lighting only. It never changes fan speeds, thermal curves
 or any other cooling parameter.
@@ -29,6 +30,7 @@ or any other cooling parameter.
 | Platform | Device | Support |
 | --- | --- | --- |
 | Linux | Beelight V3/AT32 (`2e3c:5740`) | 33 pixels, direct serial protocol |
+| Windows | Beelight V3/AT32 (`2e3c:5740`) | the same strip, through the SignalRGB add-on |
 | Linux | Corsair Vengeance RGB DDR5 | 12 LEDs per module, through OpenRGB |
 | Linux | ASUS PRIME Z690-P Aura (`0b05:19af`) | Asiahorse Lightsaber-X, 24 LEDs on `Aura Addressable 2` |
 | Linux | Corsair iCUE LINK System Hub (`1b1c:0c3f`) | six LX120/LX120-R/LX140-R fans, 18 LEDs per fan |
@@ -46,9 +48,9 @@ are not guaranteed.
 | --- | --- |
 | `src/headless_lights/` | Python package and the `headless-lights` CLI |
 | `mac-agent/` | C++ agent for macOS, its wire protocol and its test suite |
-| `signalrgb/` | Canonical source of the SignalRGB add-on, plus its test harness |
+| `signalrgb/` | Canonical source of both SignalRGB add-ons, plus their test harnesses |
 | `windows/` | SSH tunnel supervisor and the UDP-to-TCP bridge |
-| `tools/` | K70 layout generator and stream capture helpers |
+| `tools/` | K70 layout generator, add-on sync and stream capture helpers |
 | `udev/` | udev rule scoping direct access to the identified controllers |
 | `tests/` | Python test suite |
 
@@ -79,7 +81,10 @@ final binary. Full instructions are in [`mac-agent/README.md`](mac-agent/README.
 
 - SignalRGB
 - Python 3.11 or newer
-- an SSH key already authorised on the Mac
+- an SSH key already authorised on the Mac, for the Mac peripherals only
+
+The Beelight add-on needs neither Python nor SSH: SignalRGB opens the strip's
+serial port itself.
 
 ## Installation
 
@@ -276,6 +281,34 @@ headless-lights mac-stream --color ff6600 --device k70 --fps 30
 
 The frame format is documented in [`mac-agent/README.md`](mac-agent/README.md).
 
+### Beelight strip on Windows
+
+The strip plugs into the Windows PC, where it enumerates as a plain CDC serial
+port. A second add-on speaks the Beelight protocol on that port directly, so it
+needs no tunnel, no bridge and no second machine:
+
+```text
+SignalRGB --COM port--> Beelight strip
+```
+
+It is published at
+[`drungrin/signalrgb-beelight`](https://github.com/drungrin/signalrgb-beelight);
+add that repository URL under **Settings → Add-ons** as well. The handshake asks
+the strip for its own pixel count, so the canvas shows the LEDs the hardware
+reports rather than a constant.
+
+SignalRGB holds the serial port exclusively while it runs, so nothing else can
+drive the strip at the same time. That is not a regression: the Python CLI has
+always needed a POSIX host, and never worked on Windows.
+
+The canonical source stays in [`signalrgb/`](signalrgb/). Publish a change to
+either add-on with:
+
+```bash
+python tools/sync_addon.py beelight ../signalrgb-beelight
+python tools/sync_addon.py mac ../signalrgb-mac-bridge --check
+```
+
 Two platform notes: the Python package installs and runs on Windows, but the
 Beelight strip commands need a POSIX host, and the `*-service-install` commands
 depend on systemd, so both remain the Linux path.
@@ -317,10 +350,18 @@ It compiles and runs the frame parser tests and type-checks `agent.cpp` with
 and BSD socket signatures. Those catch type and arity errors, but they do not
 replace the real `install.sh` build on the Mac.
 
-When Node.js is available, the Python suite also runs the SignalRGB add-on
-against a fake canvas and decodes the frames it produces with this project's own
-parser (`tests/test_plugin_frames.py`), so the plugin and the agent cannot drift
-apart silently. Without Node.js, those tests are skipped.
+When Node.js is available, the Python suite also runs both SignalRGB add-ons
+under Node and decodes the frames they produce with this project's own parsers,
+so a plugin and its device cannot drift apart silently:
+
+- `tests/test_plugin_frames.py` renders the Mac add-on against a fake canvas and
+  parses the result with the agent's stream protocol.
+- `tests/test_beelight_plugin_frames.py` runs the Beelight add-on against a fake
+  serial port, feeds it acknowledgements encoded by
+  `headless_lights.beelight.protocol`, and decodes everything it writes back
+  with that same module.
+
+Without Node.js, those tests are skipped.
 
 ## License
 
