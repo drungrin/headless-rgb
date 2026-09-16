@@ -18,8 +18,27 @@ launch_domain="gui/$(id -u)"
 
 /bin/mkdir -p "$binary_dir" "$launch_agent_dir"
 
-/usr/bin/clang++ \
+# /usr/bin/clang++ refuses to run until the Xcode licence has been accepted,
+# which needs an interactive sudo. The Command Line Tools compiler carries no
+# such restriction, so fall back to it when the default one is blocked. It needs
+# -isysroot to find its own headers.
+compiler=/usr/bin/clang++
+sysroot=""
+if ! "$compiler" --version >/dev/null 2>&1; then
+    clt=/Library/Developer/CommandLineTools
+    if [ -x "$clt/usr/bin/clang++" ]; then
+        compiler="$clt/usr/bin/clang++"
+        sysroot="$clt/SDKs/MacOSX.sdk"
+        echo "note: using the Command Line Tools compiler (Xcode licence not accepted)"
+    else
+        echo "no usable clang++; run 'sudo xcodebuild -license' or install the Command Line Tools" >&2
+        exit 1
+    fi
+fi
+
+"$compiler" \
     -std=c++17 -Wall -Wextra -Werror \
+    ${sysroot:+-isysroot "$sysroot"} \
     -I "$hidapi_prefix/include" \
     -I "$script_dir" \
     "$script_dir/agent.cpp" \
@@ -45,3 +64,19 @@ launch_domain="gui/$(id -u)"
 
 echo "installed: $binary_dir/headless-lights-agent"
 echo "loaded: $launch_domain/com.headless-lights.agent"
+
+# The ad-hoc signature means TCC keys on the binary's CDHash, so every rebuild
+# invalidates the Accessibility grant even though the entry still shows in the
+# list. Say so here rather than letting it surface later as scimitar=error.
+if ! "$binary_dir/headless-lights-agent" --request-accessibility >/dev/null 2>&1; then
+    echo
+    echo "Accessibility: NOT granted for this build."
+    echo "The Scimitar needs it for RGB and for its 12 side buttons."
+    echo "In System Settings > Privacy & Security > Accessibility, remove any"
+    echo "existing 'headless-lights-agent' entry and add this path again:"
+    echo "  $binary_dir/headless-lights-agent"
+    echo "Then restart the agent:"
+    echo "  launchctl kickstart -k $launch_domain/com.headless-lights.agent"
+else
+    echo "accessibility: granted"
+fi

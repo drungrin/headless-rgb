@@ -5,8 +5,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import select
-import termios
 import time
+
+try:
+    import termios
+except ModuleNotFoundError:  # not POSIX; importing stays fine, opening does not
+    termios = None
 
 
 class SerialPort:
@@ -15,6 +19,11 @@ class SerialPort:
         self.fd: int | None = None
 
     def __enter__(self) -> "SerialPort":
+        if termios is None:
+            raise RuntimeError(
+                "the Beelight serial transport requires a POSIX host; "
+                f"cannot open {self.path} on this platform"
+            )
         try:
             self.fd = os.open(
                 self.path,

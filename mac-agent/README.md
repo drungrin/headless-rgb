@@ -33,6 +33,68 @@ CoreGraphics, sem observar as teclas do K70.
 sessão SSH. Por padrão o
 binário controla K70 MAX, MM700, Scimitar e G560.
 
+## Porta de streaming (127.0.0.1:7532)
+
+Além da porta de comandos, o agente aceita frames por LED em `127.0.0.1:7532`.
+É por onde o SignalRGB, rodando no PC, pinta os quatro periféricos. A porta
+também é loopback: o PC chega nela por um túnel SSH
+(`ssh -N -L 7532:127.0.0.1:7532`), então nada novo fica exposto na rede.
+
+O protocolo está em [`stream_protocol.h`](stream_protocol.h). Cada frame é um
+cabeçalho de 6 bytes seguido de triplas RGB, em little-endian:
+
+| offset | bytes | campo | valor |
+| --- | --- | --- | --- |
+| 0 | 1 | magic0 | `0x53` (`'S'`) |
+| 1 | 1 | magic1 | `0x47` (`'G'`) |
+| 2 | 1 | versão | `0x01` |
+| 3 | 1 | dispositivo | 0 = K70, 1 = MM700, 2 = G560, 3 = Scimitar |
+| 4 | 2 | tamanho | uint16 LE, sempre `3 × LEDs` do dispositivo |
+| 6 | tamanho | payload | R, G, B por LED |
+
+| dispositivo | id | LEDs | payload | frame |
+| --- | --- | --- | --- | --- |
+| K70 MAX | 0 | 142 | 426 | 432 |
+| MM700 | 1 | 3 | 9 | 15 |
+| G560 | 2 | 4 | 12 | 18 |
+| Scimitar | 3 | 3 | 9 | 15 |
+
+O K70 recebe os **142 canais de hardware**, não os 116 que acendem: o índice do
+frame é o índice em `kK70LedCoordinates`, e os canais sem LED físico vão pretos.
+Assim o agente não precisa de tabela de mapeamento própria — quem conhece o mapa
+é o cliente, que já precisa dele para posicionar as teclas.
+
+O `tamanho` é validado contra a constante exata do dispositivo, o que torna o
+cabeçalho um discriminador de cinco campos e permite ressincronizar no meio de um
+fluxo corrompido. Não há checksum (o TCP já tem) e **o agente nunca escreve nessa
+porta**: é um fluxo de mão única, sem ACK e sem handshake.
+
+Comportamento do agente:
+
+- **Coalescing** — só o frame mais recente de cada dispositivo é aplicado. Um
+  dispositivo que não acompanha descarta frames em vez de acumular atraso.
+- **Pacing** — intervalo mínimo por dispositivo (K70 33ms, MM700 e Scimitar 16ms,
+  G560 40ms). O K70 custa quatro round trips HID bloqueantes por frame.
+- **Fallback** — após 3s sem frames, o dispositivo volta ao efeito local
+  configurado no LaunchAgent.
+- **Precedência** — um `COLOR` ou `EFFECT` na porta 7531 retoma os quatro
+  dispositivos na hora, para que cada `k70=ok` da resposta corresponda a uma
+  escrita real. O streaming retoma no frame seguinte.
+
+O payload é binário: quem escrever um cliente deve enviar **bytes**, nunca uma
+string de texto. Medido neste projeto: uma rampa de 256 bytes enviada como
+string só sobrevive se o runtime a codificar em latin1; em UTF-8 todo byte
+`>= 0x80` vira dois (`0x80` → `c2 80`), o que transformaria um frame de 432
+bytes do K70 em até 640 bytes de lixo. O plugin monta um array de inteiros
+justamente por isso.
+
+Para exercitar essa porta sem o SignalRGB, do PC:
+
+```sh
+headless-lights mac-stream --effect watercolor
+headless-lights mac-stream --color ff6600 --device k70
+```
+
 `--effect watercolor` executa localmente o mesmo renderer temporal usado no PC,
 com gradiente por tecla no K70 e amostras independentes por zona no MM700, G560
 e Scimitar. O tempo Unix mantém a fase alinhada entre as duas máquinas.
@@ -48,6 +110,11 @@ Para compilar, instalar e carregar o LaunchAgent no Mac:
 ```sh
 sh install.sh
 ```
+
+Se `/usr/bin/clang++` estiver bloqueado pela licença do Xcode (o erro cita
+`sudo xcodebuild -license`), o instalador cai automaticamente para o compilador
+das Command Line Tools, que não tem essa exigência. Aceitar a licença também
+resolve, mas exige um terminal interativo.
 
 O instalador usa o `hidapi` do Homebrew, grava os arquivos em
 `~/Library/Application Support/headless-lights` e instala
@@ -66,9 +133,20 @@ executável final:
 
 Não conceda Acessibilidade a `sshd-keygen-wrapper`.
 
-Como o instalador usa assinatura ad-hoc, recompilar o agente altera sua identidade
-para a TCC. Depois de uma atualização do binário, pode ser necessário remover e
-adicionar novamente somente `headless-lights-agent` na lista de Acessibilidade.
+Como o instalador usa assinatura ad-hoc, o TCC indexa o binário pelo CDHash.
+Recompilar a partir de um fonte alterado muda esse hash e **invalida a
+autorização**, mesmo que a entrada continue aparecendo na lista — o sintoma é
+`scimitar=error` com `scimitar-buttons=unavailable`. Nesse caso, remova e
+adicione novamente `headless-lights-agent` na lista de Acessibilidade, e
+reinicie o agente:
+
+```sh
+launchctl kickstart -k gui/$(id -u)/com.headless-lights.agent
+```
+
+Recompilar o *mesmo* fonte reproduz o mesmo hash e preserva a autorização. Ao
+final, o `install.sh` informa se a permissão está ativa (`accessibility: granted`),
+para que uma quebra apareça na hora em vez de virar `scimitar=error` mais tarde.
 
 O backend do Scimitar considera uma resposta vazia como timeout e invalida o
 endpoint RGB. Quando o mouse volta ao wireless, o agente tenta novamente após

@@ -15,6 +15,7 @@ Ele foi criado para manter iluminação consistente sem depender de uma interfac
 - Serviços de usuário do systemd para manter iluminação estática ou efeitos persistentes.
 - Agente macOS em C++ que controla periféricos por HID, sem SDK do iCUE.
 - Reconexão automática do Scimitar wireless após desconexão ou timeout.
+- Plugin de SignalRGB que transmite o canvas do Windows para os periféricos do Mac, por LED.
 
 O projeto controla somente iluminação: não altera velocidade de fans, curvas térmicas nem outros parâmetros de refrigeração.
 
@@ -185,6 +186,44 @@ headless-lights mac-effect stranger-things --host usuario@mac.local
 
 O Scimitar precisa permanecer em modo software para receber animações RGB. Nesse modo, o agente restaura os 12 botões laterais como as teclas `1` a `=` e, portanto, precisa da permissão de Acessibilidade apenas para o executável final do agente.
 
+## SignalRGB no Windows
+
+Além dos comandos acima, o agente aceita **frames por LED** em `127.0.0.1:7532`. É por aí que o SignalRGB, rodando num PC Windows, assume os quatro periféricos do Mac: o K70 aparece no canvas com geometria de teclado, e os demais como zonas.
+
+O agente continua escutando apenas em loopback. O SignalRGB 2.5 expõe UDP, mas não TCP, para add-ons: um bridge local valida os datagramas e encaminha os mesmos bytes para o túnel TCP/SSH. TCP e UDP compartilham o número 7532 sem conflito, e nada novo fica exposto na rede:
+
+```text
+SignalRGB --UDP 7532--> bridge local --TCP 7532/SSH--> agente Mac --> HID
+```
+
+O supervisor inicia e mantém tanto o bridge quanto o túnel:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File windows\start-mac-tunnel.ps1
+```
+
+Por padrão ele usa o destino `mac` do seu `~/.ssh/config`; passe `-MacHost` para outro. Para deixá-lo de pé no logon, registre a tarefa agendada documentada no cabeçalho do próprio script.
+
+O add-on é publicado em [`drungrin/signalrgb-mac-bridge`](https://github.com/drungrin/signalrgb-mac-bridge). Instale a URL desse repositório em **Settings → Add-ons**; não copie o arquivo para a pasta de plugins USB. A fonte canônica também permanece em [`signalrgb/`](signalrgb/) para que os testes e o gerador do layout a validem. Se `k70max_layout.h` mudar, regenere e confira:
+
+```bash
+python tools/gen_k70_layout.py --write
+python tools/gen_k70_layout.py --check
+```
+
+Quando o SignalRGB para de enviar frames — PC desligado, aplicativo fechado, túnel caído — cada dispositivo volta sozinho ao efeito local após 3 segundos. Um `mac-color` ou `mac-effect` na porta de comandos tem precedência imediata sobre o streaming, e o streaming retoma no frame seguinte.
+
+Para exercitar essa porta sem o SignalRGB, útil para depurar o agente:
+
+```bash
+headless-lights mac-stream --effect watercolor
+headless-lights mac-stream --color ff6600 --device k70 --fps 30
+```
+
+O formato do frame está documentado em [`mac-agent/README.md`](mac-agent/README.md).
+
+Duas notas de plataforma: o pacote Python instala e roda no Windows, mas os comandos de fita Beelight exigem um host POSIX, e os serviços (`*-service-install`) dependem do systemd — ou seja, continuam sendo o caminho Linux.
+
 ## Serviços
 
 A instalação de serviços cria unidades de usuário; não é necessário executar o controlador como root. Consulte o estado dos serviços Linux com:
@@ -199,13 +238,23 @@ systemctl --user status \
 
 ## Desenvolvimento e testes
 
-Execute a suíte de testes a partir da raiz do repositório:
+Execute a suíte Python a partir da raiz do repositório:
 
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-Os testes cobrem o protocolo Beelight, seleção de dispositivos OpenRGB, topologias do hub, unidades systemd, comunicação com o agente macOS e renderização dos efeitos.
+Os testes cobrem o protocolo Beelight, seleção de dispositivos OpenRGB, topologias do hub, unidades systemd, comunicação com o agente macOS, renderização dos efeitos, o protocolo de streaming e o layout gerado do K70.
+
+O lado C++ tem sua própria suíte, que roda em qualquer plataforma:
+
+```bash
+sh mac-agent/tests/run.sh
+```
+
+Ela compila e executa os testes do parser de frames e faz a verificação de tipos de `agent.cpp` com `-Wall -Wextra -Werror`. Fora do macOS ela usa os stubs de declaração em `mac-agent/tests/shims/`, que reproduzem as assinaturas reais de hidapi, ApplicationServices e sockets BSD — pegam erro de tipo e de aridade, mas não substituem o build real do `install.sh` no Mac.
+
+Se o Node estiver instalado, a suíte Python também executa o plugin do SignalRGB contra um canvas falso e decodifica os frames que ele produz com o parser do projeto (`tests/test_plugin_frames.py`), garantindo que plugin e agente não divirjam em silêncio. Sem Node, esses testes são pulados.
 
 ## Licença
 
