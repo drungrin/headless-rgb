@@ -1,153 +1,178 @@
 # mac-agent
 
-Ferramentas do agente que aplica no Mac cores fixas e efeitos definidos pelo PC.
+Tooling for the agent that applies static colours and PC-defined effects on the
+Mac.
 
-`icue_probe.cpp` permanece apenas como diagnóstico histórico do SDK. O agente de
-produção não carrega o iCUE nem redistribui seu framework.
+`icue_probe.cpp` remains only as a historical diagnostic of the SDK. The
+production agent neither loads iCUE nor redistributes its framework.
 
-`k70max_probe.cpp`, `k70max_layout.h` e `mm700_probe.cpp` validam os backends HID
-diretos. O protocolo e o mapa físico derivam respectivamente das implementações
-K70 MAX e MM700 do OpenLinkHub; esses arquivos e `agent.cpp` são distribuídos
-sob GPL-3.0-or-later.
+`k70max_probe.cpp`, `k70max_layout.h` and `mm700_probe.cpp` validate the direct
+HID backends. The protocol and the physical map derive from the OpenLinkHub K70
+MAX and MM700 implementations respectively; those files and `agent.cpp` are
+distributed under GPL-3.0-or-later.
 
-`g560_probe.cpp` enumera a interface Lightsync do Logitech G560. Com
-`--color RRGGBB`, aplica a mesma cor às quatro zonas usando o protocolo HID
-documentado no driver do
-[OpenRGB](https://gitlab.com/CalcProgrammer1/OpenRGB/-/tree/master/Controllers/LogitechController).
-Esse arquivo é disponibilizado sob GPL-2.0-or-later, acompanhando a licença da
-implementação de referência.
+`g560_probe.cpp` enumerates the Logitech G560 Lightsync interface. With
+`--color RRGGBB` it applies the same colour to all four zones using the HID
+protocol documented in the
+[OpenRGB](https://gitlab.com/CalcProgrammer1/OpenRGB/-/tree/master/Controllers/LogitechController)
+driver. That file is provided under GPL-2.0-or-later, matching the licence of
+the reference implementation.
 
-`scimitar_probe.cpp` testa o fallback HID não exclusivo para o Scimitar Elite
-Wireless SE através do receptor Slipstream (`1b1c:2b00`, endpoint `09`). Sem
-argumentos ele apenas enumera; com
-`--color RRGGBB`, usa somente modo de software, endpoint RGB e escrita de cor.
-O formato vem do OpenLinkHub e o arquivo é GPL-3.0-or-later.
+`scimitar_probe.cpp` exercises the non-exclusive HID fallback for the Scimitar
+Elite Wireless SE through the Slipstream receiver (`1b1c:2b00`, endpoint `09`).
+With no arguments it only enumerates; with `--color RRGGBB` it uses software
+mode, the RGB endpoint and a colour write. The format comes from OpenLinkHub and
+the file is GPL-3.0-or-later.
 
-`scimitar_input_probe.cpp` documenta o bitmask dos 12 botões laterais recebido
-pela interface 2 do Slipstream. O agente converte esses bits em `1` até `=` via
-CoreGraphics, sem observar as teclas do K70.
+`scimitar_input_probe.cpp` documents the 12-side-button bitmask received on
+Slipstream interface 2. The agent turns those bits into `1` through `=` via
+CoreGraphics, without observing the K70 keys.
 
-`agent.cpp` reúne quatro backends HID diretos e escuta somente em
-`127.0.0.1:7531`. O PC envia `COLOR RRGGBB`, `EFFECT WATERCOLOR`,
-`EFFECT STRANGER-THINGS`, `EFFECT BORDERLANDS-4` ou `STATUS` através de uma
-sessão SSH. Por padrão o
-binário controla K70 MAX, MM700, Scimitar e G560.
+`agent.cpp` combines four direct HID backends and listens on `127.0.0.1:7531`
+only. The PC sends `COLOR RRGGBB`, `EFFECT WATERCOLOR`, `EFFECT STRANGER-THINGS`,
+`EFFECT BORDERLANDS-4` or `STATUS` through an SSH session. By default the binary
+drives the K70 MAX, MM700, Scimitar and G560.
 
-## Porta de streaming (127.0.0.1:7532)
+## Streaming port (127.0.0.1:7532)
 
-Além da porta de comandos, o agente aceita frames por LED em `127.0.0.1:7532`.
-É por onde o SignalRGB, rodando no PC, pinta os quatro periféricos. A porta
-também é loopback: o PC chega nela por um túnel SSH
-(`ssh -N -L 7532:127.0.0.1:7532`), então nada novo fica exposto na rede.
+Besides the command port, the agent accepts per-LED frames on
+`127.0.0.1:7532`. That is where SignalRGB, running on the PC, paints the four
+peripherals. This port is loopback as well: the PC reaches it through an SSH
+tunnel (`ssh -N -L 7532:127.0.0.1:7532`), so nothing new is exposed on the
+network.
 
-O protocolo está em [`stream_protocol.h`](stream_protocol.h). Cada frame é um
-cabeçalho de 6 bytes seguido de triplas RGB, em little-endian:
+The protocol lives in [`stream_protocol.h`](stream_protocol.h). Each frame is a
+6-byte header followed by RGB triples, little-endian:
 
-| offset | bytes | campo | valor |
+| offset | bytes | field | value |
 | --- | --- | --- | --- |
 | 0 | 1 | magic0 | `0x53` (`'S'`) |
 | 1 | 1 | magic1 | `0x47` (`'G'`) |
-| 2 | 1 | versão | `0x01` |
-| 3 | 1 | dispositivo | 0 = K70, 1 = MM700, 2 = G560, 3 = Scimitar |
-| 4 | 2 | tamanho | uint16 LE, sempre `3 × LEDs` do dispositivo |
-| 6 | tamanho | payload | R, G, B por LED |
+| 2 | 1 | version | `0x01` |
+| 3 | 1 | device | 0 = K70, 1 = MM700, 2 = G560, 3 = Scimitar |
+| 4 | 2 | length | uint16 LE, always `3 × LEDs` for that device |
+| 6 | length | payload | R, G, B per LED |
 
-| dispositivo | id | LEDs | payload | frame |
+| device | id | LEDs | payload | frame |
 | --- | --- | --- | --- | --- |
 | K70 MAX | 0 | 142 | 426 | 432 |
 | MM700 | 1 | 3 | 9 | 15 |
 | G560 | 2 | 4 | 12 | 18 |
 | Scimitar | 3 | 3 | 9 | 15 |
 
-O K70 recebe os **142 canais de hardware**, não os 116 que acendem: o índice do
-frame é o índice em `kK70LedCoordinates`, e os canais sem LED físico vão pretos.
-Assim o agente não precisa de tabela de mapeamento própria — quem conhece o mapa
-é o cliente, que já precisa dele para posicionar as teclas.
+The K70 receives all **142 hardware channels**, not the 116 that light up: the
+frame index is the index into `kK70LedCoordinates`, and channels with no
+physical LED arrive black. That way the agent needs no mapping table of its own
+— the client owns the map, and it already needs one to position the keys.
 
-O `tamanho` é validado contra a constante exata do dispositivo, o que torna o
-cabeçalho um discriminador de cinco campos e permite ressincronizar no meio de um
-fluxo corrompido. Não há checksum (o TCP já tem) e **o agente nunca escreve nessa
-porta**: é um fluxo de mão única, sem ACK e sem handshake.
+`length` is validated against the exact constant for the device, which turns the
+header into a five-field discriminator and allows resynchronising in the middle
+of a corrupted stream. There is no checksum (TCP already has one) and **the agent
+never writes to this port**: it is a one-way stream, with no ACK and no
+handshake.
 
-Comportamento do agente:
+Agent behaviour:
 
-- **Coalescing** — só o frame mais recente de cada dispositivo é aplicado. Um
-  dispositivo que não acompanha descarta frames em vez de acumular atraso.
-- **Pacing** — intervalo mínimo por dispositivo (K70 33ms, MM700 e Scimitar 16ms,
-  G560 40ms). O K70 custa quatro round trips HID bloqueantes por frame.
-- **Fallback** — após 3s sem frames, o dispositivo volta ao efeito local
-  configurado no LaunchAgent.
-- **Precedência** — um `COLOR` ou `EFFECT` na porta 7531 retoma os quatro
-  dispositivos na hora, para que cada `k70=ok` da resposta corresponda a uma
-  escrita real. O streaming retoma no frame seguinte.
+- **Coalescing** — only the newest frame per device is applied. A device that
+  cannot keep up drops frames instead of accumulating latency.
+- **Pacing** — a minimum interval per device (K70 33 ms, MM700 and Scimitar
+  16 ms, G560 40 ms). The K70 costs four blocking HID round trips per frame.
+- **Fallback** — after 3 s without frames, the device returns to the local
+  effect configured in the LaunchAgent.
+- **Precedence** — a `COLOR` or `EFFECT` on port 7531 reclaims all four devices
+  immediately, so every `k70=ok` in the response corresponds to a real write.
+  Streaming resumes on the next frame.
 
-O payload é binário: quem escrever um cliente deve enviar **bytes**, nunca uma
-string de texto. Medido neste projeto: uma rampa de 256 bytes enviada como
-string só sobrevive se o runtime a codificar em latin1; em UTF-8 todo byte
-`>= 0x80` vira dois (`0x80` → `c2 80`), o que transformaria um frame de 432
-bytes do K70 em até 640 bytes de lixo. O plugin monta um array de inteiros
-justamente por isso.
+The payload is binary: anyone writing a client must send **bytes**, never a text
+string. Measured in this project: a 256-byte ramp sent as a string only survives
+if the runtime encodes it as latin1; in UTF-8 every byte `>= 0x80` becomes two
+(`0x80` → `c2 80`), which would turn a 432-byte K70 frame into as much as 640
+bytes of garbage. That is exactly why the plugin builds an array of integers.
 
-Para exercitar essa porta sem o SignalRGB, do PC:
+To exercise this port without SignalRGB, from the PC:
 
 ```sh
 headless-lights mac-stream --effect watercolor
 headless-lights mac-stream --color ff6600 --device k70
 ```
 
-`--effect watercolor` executa localmente o mesmo renderer temporal usado no PC,
-com gradiente por tecla no K70 e amostras independentes por zona no MM700, G560
-e Scimitar. O tempo Unix mantém a fase alinhada entre as duas máquinas.
+`--effect watercolor` runs locally the same temporal renderer used on the PC,
+with a per-key gradient on the K70 and independent per-zone samples on the
+MM700, G560 and Scimitar. Unix time keeps the phase aligned across both
+machines.
 
-`--effect stranger-things` reproduz somente a animação ambiente do perfil, sem
-captura de teclas ou camadas reativas.
+`--effect stranger-things` reproduces only the ambient animation from the
+profile, without key capture or reactive layers.
 
-`--effect borderlands-4` reproduz as camadas contínuas vermelha, laranja e
-dourada do perfil, sem os efeitos originais acionados por tecla.
+`--effect borderlands-4` reproduces the continuous red, orange and gold layers
+from the profile, without the original key-triggered effects.
 
-Para compilar, instalar e carregar o LaunchAgent no Mac:
+## Building and installing
+
+To compile, install and load the LaunchAgent on the Mac:
 
 ```sh
 sh install.sh
 ```
 
-Se `/usr/bin/clang++` estiver bloqueado pela licença do Xcode (o erro cita
-`sudo xcodebuild -license`), o instalador cai automaticamente para o compilador
-das Command Line Tools, que não tem essa exigência. Aceitar a licença também
-resolve, mas exige um terminal interativo.
+If `/usr/bin/clang++` is blocked by the Xcode licence (the error mentions
+`sudo xcodebuild -license`), the installer automatically falls back to the
+Command Line Tools compiler, which carries no such requirement. Accepting the
+licence also works, but needs an interactive terminal.
 
-O instalador usa o `hidapi` do Homebrew, grava os arquivos em
-`~/Library/Application Support/headless-lights` e instala
-`~/Library/LaunchAgents/com.headless-lights.agent.plist`. O processo inicia em
-Borderlands 4, reinicia se um dispositivo for reconectado e não expõe uma
-porta na rede.
+The installer uses Homebrew's `hidapi`, writes the files under
+`~/Library/Application Support/headless-lights` and installs
+`~/Library/LaunchAgents/com.headless-lights.agent.plist`. The process starts on
+Borderlands 4, restarts if a device is reconnected, and exposes no network port.
 
-O Scimitar precisa permanecer em modo software para aceitar RGB animado. Nesse
-modo, o agente lê o bitmask dos botões laterais pela interface vendor Slipstream
-e publica `1` até `=` via CoreGraphics. Conceda Acessibilidade somente ao
-executável final:
+## Tests
+
+The C++ checks run on any platform:
+
+```sh
+sh mac-agent/tests/run.sh
+```
+
+They compile and run the frame parser tests in `tests/stream_protocol_test.cpp`,
+then type-check `agent.cpp` with `-Wall -Wextra -Werror`. On macOS the
+type-check uses the real hidapi and ApplicationServices headers. Elsewhere it
+uses the declaration-only stubs in `tests/shims/`, which reproduce the real
+hidapi, ApplicationServices and BSD socket signatures, so the agent can be
+type-checked from the Windows PC where the SignalRGB plugin is developed.
+
+The stubs catch wrong argument types, wrong arity and calls that do not exist.
+They cannot catch linking or runtime behaviour, so `install.sh` on the Mac
+remains the final word.
+
+## Accessibility
+
+The Scimitar must stay in software mode to accept animated RGB. In that mode the
+agent reads the side-button bitmask from the Slipstream vendor interface and
+publishes `1` through `=` via CoreGraphics. Grant Accessibility to the final
+executable only:
 
 ```text
 ~/Library/Application Support/headless-lights/bin/headless-lights-agent
 ```
 
-Não conceda Acessibilidade a `sshd-keygen-wrapper`.
+Do not grant Accessibility to `sshd-keygen-wrapper`.
 
-Como o instalador usa assinatura ad-hoc, o TCC indexa o binário pelo CDHash.
-Recompilar a partir de um fonte alterado muda esse hash e **invalida a
-autorização**, mesmo que a entrada continue aparecendo na lista — o sintoma é
-`scimitar=error` com `scimitar-buttons=unavailable`. Nesse caso, remova e
-adicione novamente `headless-lights-agent` na lista de Acessibilidade, e
-reinicie o agente:
+Because the installer uses an ad-hoc signature, TCC keys the binary by its
+CDHash. Rebuilding from changed source changes that hash and **invalidates the
+grant**, even though the entry still appears in the list — the symptom is
+`scimitar=error` together with `scimitar-buttons=unavailable`. When that
+happens, remove and re-add `headless-lights-agent` in the Accessibility list,
+then restart the agent:
 
 ```sh
 launchctl kickstart -k gui/$(id -u)/com.headless-lights.agent
 ```
 
-Recompilar o *mesmo* fonte reproduz o mesmo hash e preserva a autorização. Ao
-final, o `install.sh` informa se a permissão está ativa (`accessibility: granted`),
-para que uma quebra apareça na hora em vez de virar `scimitar=error` mais tarde.
+Rebuilding the *same* source reproduces the same hash and preserves the grant.
+At the end, `install.sh` reports whether the permission is active
+(`accessibility: granted`), so a break shows up immediately instead of surfacing
+later as `scimitar=error`.
 
-O backend do Scimitar considera uma resposta vazia como timeout e invalida o
-endpoint RGB. Quando o mouse volta ao wireless, o agente tenta novamente após
-dois segundos, restaura a animação e mantém o mapeamento lateral ativo.
+The Scimitar backend treats an empty response as a timeout and invalidates the
+RGB endpoint. When the mouse returns to wireless, the agent retries after two
+seconds, restores the animation and keeps the side-button mapping active.
