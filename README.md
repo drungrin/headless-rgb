@@ -1,71 +1,97 @@
 # headless-lights
 
-Controlador RGB headless para Linux, com sincronização opcional de periféricos RGB conectados a um Mac na mesma rede. O projeto usa protocolos diretos para a fita Beelight e OpenRGB para os dispositivos locais compatíveis.
+A headless RGB controller for a desk split across three machines. It drives the
+lighting on a Linux PC directly, controls the peripherals attached to a Mac over
+an authenticated SSH connection, and lets SignalRGB on a Windows PC paint those
+Mac peripherals per LED.
 
-Ele foi criado para manter iluminação consistente sem depender de uma interface gráfica ou do iCUE.
+It exists to keep lighting consistent without depending on a vendor GUI: no
+iCUE, and no graphical session required on the Linux side.
 
-## Recursos
+## Features
 
-- Controle da fita USB **Beelight V3/AT32**, incluindo cor estática e frames por LED.
-- Controle de RAM Corsair RGB, controladores ASUS Aura e fans Corsair iCUE LINK via OpenRGB.
-- Efeitos animados sincronizados entre Linux e macOS pelo relógio Unix:
-  - Watercolor Spectrum;
-  - Stranger Things;
-  - Borderlands 4.
-- Serviços de usuário do systemd para manter iluminação estática ou efeitos persistentes.
-- Agente macOS em C++ que controla periféricos por HID, sem SDK do iCUE.
-- Reconexão automática do Scimitar wireless após desconexão ou timeout.
-- Plugin de SignalRGB que transmite o canvas do Windows para os periféricos do Mac, por LED.
+- **Beelight V3/AT32** USB strip control, including static colour and per-LED frames.
+- Corsair RGB memory, ASUS Aura controllers and Corsair iCUE LINK fans through OpenRGB.
+- Animated effects kept in phase across Linux and macOS by the Unix clock:
+  - Watercolor Spectrum
+  - Stranger Things
+  - Borderlands 4
+- systemd user services for persistent static colour or effects.
+- A C++ macOS agent that drives peripherals over direct HID, without the iCUE SDK.
+- Automatic Scimitar wireless recovery after a disconnect or timeout.
+- A SignalRGB add-on that streams the Windows canvas to the Mac peripherals, per LED.
 
-O projeto controla somente iluminação: não altera velocidade de fans, curvas térmicas nem outros parâmetros de refrigeração.
+This project controls lighting only. It never changes fan speeds, thermal curves
+or any other cooling parameter.
 
-## Hardware testado
+## Tested hardware
 
-| Plataforma | Dispositivo | Suporte |
+| Platform | Device | Support |
 | --- | --- | --- |
-| Linux | Beelight V3/AT32 (`2e3c:5740`) | 33 pixels, protocolo serial direto |
-| Linux | Corsair Vengeance RGB DDR5 | 12 LEDs por módulo, via OpenRGB |
-| Linux | ASUS PRIME Z690-P Aura (`0b05:19af`) | Asiahorse Lightsaber-X, 24 LEDs em `Aura Addressable 2` |
-| Linux | Corsair iCUE LINK System Hub (`1b1c:0c3f`) | seis fans LX120/LX120-R/LX140-R, 18 LEDs por fan |
-| macOS | Corsair K70 MAX | 116 LEDs, HID direto |
-| macOS | Corsair MM700 RGB | 3 LEDs, HID direto |
-| macOS | Corsair Scimitar Elite Wireless SE | 3 zonas RGB e 12 botões laterais |
-| macOS | Logitech G560 | 4 zonas, HID direto |
+| Linux | Beelight V3/AT32 (`2e3c:5740`) | 33 pixels, direct serial protocol |
+| Linux | Corsair Vengeance RGB DDR5 | 12 LEDs per module, through OpenRGB |
+| Linux | ASUS PRIME Z690-P Aura (`0b05:19af`) | Asiahorse Lightsaber-X, 24 LEDs on `Aura Addressable 2` |
+| Linux | Corsair iCUE LINK System Hub (`1b1c:0c3f`) | six LX120/LX120-R/LX140-R fans, 18 LEDs per fan |
+| macOS | Corsair K70 MAX | 116 lit keys (142 hardware channels), direct HID |
+| macOS | Corsair MM700 RGB | 3 zones, direct HID |
+| macOS | Corsair Scimitar Elite Wireless SE | 3 RGB zones and 12 side buttons |
+| macOS | Logitech G560 | 4 zones, direct HID |
 
-O suporte é validado para esta combinação de dispositivos. Outros modelos podem funcionar, mas não são garantidos.
+Support is validated for this specific combination. Other models may work, but
+are not guaranteed.
 
-## Requisitos
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `src/headless_lights/` | Python package and the `headless-lights` CLI |
+| `mac-agent/` | C++ agent for macOS, its wire protocol and its test suite |
+| `signalrgb/` | Canonical source of the SignalRGB add-on, plus its test harness |
+| `windows/` | SSH tunnel supervisor and the UDP-to-TCP bridge |
+| `tools/` | K70 layout generator and stream capture helpers |
+| `udev/` | udev rule scoping direct access to the identified controllers |
+| `tests/` | Python test suite |
+
+## Requirements
 
 ### Linux
 
-- Python 3.11 ou superior;
-- OpenRGB;
-- `i2c-tools` para a RAM DDR5;
-- acesso aos grupos `dialout`, `i2c` e `plugdev`.
+- Python 3.11 or newer
+- OpenRGB
+- `i2c-tools` for the DDR5 memory
+- membership in the `dialout`, `i2c` and `plugdev` groups
 
-Em distribuições baseadas em Debian ou Ubuntu:
+On Debian or Ubuntu based distributions:
 
 ```bash
 sudo apt install openrgb i2c-tools
 sudo usermod -aG dialout,i2c,plugdev "$USER"
 ```
 
-Saia da sessão e entre novamente (ou reinicie) para que os novos grupos sejam aplicados.
+Log out and back in (or reboot) so the new groups take effect.
 
-### macOS (opcional)
+### macOS (optional)
 
-O agente do Mac requer o `hidapi` do Homebrew e permissões de Acessibilidade para o binário final. As instruções completas estão em [`mac-agent/README.md`](mac-agent/README.md).
+The Mac agent needs Homebrew's `hidapi` and Accessibility permission for the
+final binary. Full instructions are in [`mac-agent/README.md`](mac-agent/README.md).
 
-## Instalação
+### Windows (optional, for SignalRGB)
 
-Na raiz do repositório, instale o pacote em um ambiente virtual:
+- SignalRGB
+- Python 3.11 or newer
+- an SSH key already authorised on the Mac
+
+## Installation
+
+From the repository root, install the package into a virtual environment:
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e .
 ```
 
-A regra udev incluída limita o acesso direto aos controladores ASUS Aura e Corsair iCUE LINK identificados pelo projeto. Instale-a a partir da raiz do repositório:
+The bundled udev rule scopes direct access to the ASUS Aura and Corsair iCUE
+LINK controllers this project identifies. Install it from the repository root:
 
 ```bash
 sudo install -o root -g root -m 0644 \
@@ -75,66 +101,70 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=hidraw --action=add
 ```
 
-## Uso rápido
+## Quick start
 
-### Fita Beelight
+### Beelight strip
 
-Descubra a porta serial e consulte o dispositivo:
+Discover the serial port and query the device:
 
 ```bash
 headless-lights detect
 headless-lights info
 ```
 
-Aplique cor, brilho ou um frame com uma cor por LED:
+Apply a colour, a brightness level, or a frame carrying one colour per LED:
 
 ```bash
 headless-lights color ff6600
 headless-lights brightness 60
-headless-lights pixels COR_01 COR_02 ... COR_33
+headless-lights pixels COLOR_01 COLOR_02 ... COLOR_33
 ```
 
-Use `hold` para manter a porta aberta, responder aos heartbeats do dispositivo e restaurar a iluminação caso o USB seja reconectado:
+Use `hold` to keep the port open, answer the device heartbeats, and restore the
+lighting if the USB connection comes back:
 
 ```bash
 headless-lights hold 0000ff --fps 20
 ```
 
-Para iniciar uma cor estática no login:
+To apply a static colour at login:
 
 ```bash
 headless-lights service-install 0000ff --fps 20
 ```
 
-### Dispositivos OpenRGB locais
+### Local OpenRGB devices
 
 ```bash
-# RAM Corsair
+# Corsair memory
 headless-lights ram-color 0000ff
 headless-lights ram-service-install 0000ff
 
-# Fita Asiahorse ligada ao ASUS Aura
+# Asiahorse strip wired to the ASUS Aura controller
 headless-lights aura-color 0000ff
 headless-lights aura-service-install 0000ff
 
-# Fans Corsair iCUE LINK
+# Corsair iCUE LINK fans
 headless-lights hub-hold 0000ff
 headless-lights hub-service-install 0000ff
 ```
 
-O controlador valida a topologia antes de gravar: a configuração testada espera seis zonas de 18 LEDs (108 LEDs no total) no hub e 24 LEDs na zona Aura configurada.
+The controller validates the topology before writing: the tested configuration
+expects six zones of 18 LEDs (108 LEDs total) on the hub, and 24 LEDs on the
+configured Aura zone.
 
-### Efeitos animados
+### Animated effects
 
-Os efeitos usam o tempo Unix como fase comum, para que as animações Linux e macOS permaneçam alinhadas.
+Effects use Unix time as a shared phase, so the Linux and macOS animations stay
+aligned.
 
-| Efeito | Descrição |
+| Effect | Description |
 | --- | --- |
-| `watercolor` | Faixas suaves de ciano, azul, violeta, magenta, rosa e amarelo claro |
-| `stranger-things` | Fundo azul/roxo, chuva e ondas vermelhas, com flashes periódicos |
-| `borderlands-4` | Camadas contínuas vermelha, laranja e dourada |
+| `watercolor` | Soft bands of cyan, blue, violet, magenta, pink and pale yellow |
+| `stranger-things` | Blue/purple base with red rain and waves, plus periodic flashes |
+| `borderlands-4` | Continuous red, orange and gold layers |
 
-Execute um preview temporário:
+Run a temporary preview:
 
 ```bash
 headless-lights effect-preview watercolor --scope hub --seconds 20 --fps 12
@@ -142,91 +172,118 @@ headless-lights effect-preview stranger-things --scope pc --seconds 21 --fps 12
 headless-lights effect-preview borderlands-4 --scope pc --seconds 20 --fps 12
 ```
 
-Mantenha um efeito em primeiro plano ou instale-o como serviço:
+Hold an effect in the foreground, or install it as a service:
 
 ```bash
 headless-lights effect-hold watercolor --scope pc --fps 12
 headless-lights effect-service-install borderlands-4 --scope pc --fps 12
 ```
 
-Os escopos disponíveis são:
+The available scopes are:
 
-| Escopo | Dispositivos |
+| Scope | Devices |
 | --- | --- |
-| `hub` | Fans iCUE LINK |
-| `local` | Fans, RAM Corsair e Asiahorse |
-| `pc` | Fans, RAM Corsair, Asiahorse e Beelight |
+| `hub` | iCUE LINK fans |
+| `local` | Fans, Corsair memory and Asiahorse |
+| `pc` | Fans, Corsair memory, Asiahorse and Beelight |
 
-Não execute um preview ou uma cor estática no mesmo dispositivo enquanto o serviço de efeitos estiver ativo. Pause o renderer antes de trocar temporariamente a iluminação:
+Do not run a preview or a static colour against a device while the effect
+service is driving it. Pause the renderer before changing the lighting
+temporarily:
 
 ```bash
 systemctl --user stop headless-lights-effect.service
-# Execute o comando desejado.
+# Run the command you need.
 systemctl --user start headless-lights-effect.service
 ```
 
-## Agente macOS
+## macOS agent
 
-O agente em [`mac-agent/`](mac-agent/) controla K70 MAX, MM700, Scimitar e G560 por HID direto. Ele escuta somente em `127.0.0.1:7531`; o computador Linux o acessa por uma conexão SSH autenticada.
+The agent in [`mac-agent/`](mac-agent/) drives the K70 MAX, MM700, Scimitar and
+G560 over direct HID. It listens on `127.0.0.1` only; other machines reach it
+through an authenticated SSH connection.
 
-No Mac, instale o agente com:
+Install it on the Mac with:
 
 ```bash
 cd mac-agent
 sh install.sh
 ```
 
-Depois, no Linux, use um destino SSH configurado:
+Then, from the Linux PC, use a configured SSH destination:
 
 ```bash
-headless-lights mac-status --host usuario@mac.local
-headless-lights mac-color 0000ff --host usuario@mac.local
-headless-lights mac-effect stranger-things --host usuario@mac.local
+headless-lights mac-status --host user@mac.local
+headless-lights mac-color 0000ff --host user@mac.local
+headless-lights mac-effect stranger-things --host user@mac.local
 ```
 
-O Scimitar precisa permanecer em modo software para receber animações RGB. Nesse modo, o agente restaura os 12 botões laterais como as teclas `1` a `=` e, portanto, precisa da permissão de Acessibilidade apenas para o executável final do agente.
+The Scimitar must stay in software mode to accept animated RGB. In that mode the
+agent restores the 12 side buttons as the keys `1` through `=`, which is why it
+needs Accessibility permission for the agent binary alone.
 
-## SignalRGB no Windows
+## SignalRGB on Windows
 
-Além dos comandos acima, o agente aceita **frames por LED** em `127.0.0.1:7532`. É por aí que o SignalRGB, rodando num PC Windows, assume os quatro periféricos do Mac: o K70 aparece no canvas com geometria de teclado, e os demais como zonas.
+Besides the command port, the agent accepts **per-LED frames** on
+`127.0.0.1:7532`. That is how SignalRGB, running on a Windows PC, takes over the
+four Mac peripherals: the K70 appears on the canvas with real key geometry, and
+the others as zones.
 
-O agente continua escutando apenas em loopback. O SignalRGB 2.5 expõe UDP, mas não TCP, para add-ons: um bridge local valida os datagramas e encaminha os mesmos bytes para o túnel TCP/SSH. TCP e UDP compartilham o número 7532 sem conflito, e nada novo fica exposto na rede:
+SignalRGB 2.5 exposes UDP, but not TCP, to third-party plugins, so a small local
+bridge validates each datagram and forwards the same bytes into the SSH tunnel.
+TCP and UDP share port number 7532 without conflict because they are separate
+port spaces, and every endpoint stays bound to loopback:
 
 ```text
-SignalRGB --UDP 7532--> bridge local --TCP 7532/SSH--> agente Mac --> HID
+SignalRGB --UDP 7532--> local bridge --TCP 7532/SSH--> Mac agent --> HID
 ```
 
-O supervisor inicia e mantém tanto o bridge quanto o túnel:
+One supervisor starts and restarts both the bridge and the tunnel:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File windows\start-mac-tunnel.ps1
 ```
 
-Por padrão ele usa o destino `mac` do seu `~/.ssh/config`; passe `-MacHost` para outro. Para deixá-lo de pé no logon, registre a tarefa agendada documentada no cabeçalho do próprio script.
+By default it uses the `mac` destination from your `~/.ssh/config`; pass
+`-MacHost` for another. To keep it up from logon, register the scheduled task
+documented in the script header. It writes diagnostics to
+`%LOCALAPPDATA%\headless-lights\`.
 
-O add-on é publicado em [`drungrin/signalrgb-mac-bridge`](https://github.com/drungrin/signalrgb-mac-bridge). Instale a URL desse repositório em **Settings → Add-ons**; não copie o arquivo para a pasta de plugins USB. A fonte canônica também permanece em [`signalrgb/`](signalrgb/) para que os testes e o gerador do layout a validem. Se `k70max_layout.h` mudar, regenere e confira:
+The add-on is published at
+[`drungrin/signalrgb-mac-bridge`](https://github.com/drungrin/signalrgb-mac-bridge).
+Add that repository URL under **Settings → Add-ons**; do not copy the file into
+the USB plugin folder, which SignalRGB only scans for HID devices. The canonical
+source also stays in [`signalrgb/`](signalrgb/) so the tests and the layout
+generator validate it. If `k70max_layout.h` changes, regenerate and verify:
 
 ```bash
 python tools/gen_k70_layout.py --write
 python tools/gen_k70_layout.py --check
 ```
 
-Quando o SignalRGB para de enviar frames — PC desligado, aplicativo fechado, túnel caído — cada dispositivo volta sozinho ao efeito local após 3 segundos. Um `mac-color` ou `mac-effect` na porta de comandos tem precedência imediata sobre o streaming, e o streaming retoma no frame seguinte.
+When SignalRGB stops sending frames — PC asleep, application closed, tunnel down
+— each device returns to its local effect after three seconds. A `mac-color` or
+`mac-effect` on the command port preempts streaming immediately, and streaming
+reclaims the devices on the next frame.
 
-Para exercitar essa porta sem o SignalRGB, útil para depurar o agente:
+To exercise that port without SignalRGB, which is useful when debugging the
+agent:
 
 ```bash
 headless-lights mac-stream --effect watercolor
 headless-lights mac-stream --color ff6600 --device k70 --fps 30
 ```
 
-O formato do frame está documentado em [`mac-agent/README.md`](mac-agent/README.md).
+The frame format is documented in [`mac-agent/README.md`](mac-agent/README.md).
 
-Duas notas de plataforma: o pacote Python instala e roda no Windows, mas os comandos de fita Beelight exigem um host POSIX, e os serviços (`*-service-install`) dependem do systemd — ou seja, continuam sendo o caminho Linux.
+Two platform notes: the Python package installs and runs on Windows, but the
+Beelight strip commands need a POSIX host, and the `*-service-install` commands
+depend on systemd, so both remain the Linux path.
 
-## Serviços
+## Services
 
-A instalação de serviços cria unidades de usuário; não é necessário executar o controlador como root. Consulte o estado dos serviços Linux com:
+Installing a service creates a user unit; the controller never needs to run as
+root. Check the Linux services with:
 
 ```bash
 systemctl --user status \
@@ -236,26 +293,38 @@ systemctl --user status \
   headless-lights-effect.service
 ```
 
-## Desenvolvimento e testes
+## Development and testing
 
-Execute a suíte Python a partir da raiz do repositório:
+Run the Python suite from the repository root:
 
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-Os testes cobrem o protocolo Beelight, seleção de dispositivos OpenRGB, topologias do hub, unidades systemd, comunicação com o agente macOS, renderização dos efeitos, o protocolo de streaming e o layout gerado do K70.
+It covers the Beelight protocol, OpenRGB device selection, hub topologies,
+systemd units, macOS agent communication, effect rendering, the streaming
+protocol, the Windows bridge and the generated K70 layout.
 
-O lado C++ tem sua própria suíte, que roda em qualquer plataforma:
+The C++ side has its own suite, which runs on any platform:
 
 ```bash
 sh mac-agent/tests/run.sh
 ```
 
-Ela compila e executa os testes do parser de frames e faz a verificação de tipos de `agent.cpp` com `-Wall -Wextra -Werror`. Fora do macOS ela usa os stubs de declaração em `mac-agent/tests/shims/`, que reproduzem as assinaturas reais de hidapi, ApplicationServices e sockets BSD — pegam erro de tipo e de aridade, mas não substituem o build real do `install.sh` no Mac.
+It compiles and runs the frame parser tests and type-checks `agent.cpp` with
+`-Wall -Wextra -Werror`. Away from macOS it uses the declaration-only stubs in
+`mac-agent/tests/shims/`, which reproduce the real hidapi, ApplicationServices
+and BSD socket signatures. Those catch type and arity errors, but they do not
+replace the real `install.sh` build on the Mac.
 
-Se o Node estiver instalado, a suíte Python também executa o plugin do SignalRGB contra um canvas falso e decodifica os frames que ele produz com o parser do projeto (`tests/test_plugin_frames.py`), garantindo que plugin e agente não divirjam em silêncio. Sem Node, esses testes são pulados.
+When Node.js is available, the Python suite also runs the SignalRGB add-on
+against a fake canvas and decodes the frames it produces with this project's own
+parser (`tests/test_plugin_frames.py`), so the plugin and the agent cannot drift
+apart silently. Without Node.js, those tests are skipped.
 
-## Licença
+## License
 
-Este repositório ainda não contém uma licença de distribuição. Antes de reutilizar, modificar ou redistribuir o código, entre em contato com a pessoa mantenedora. Alguns arquivos em [`mac-agent/`](mac-agent/) possuem atribuições e condições de licença específicas, documentadas no README daquele diretório.
+This repository does not yet carry a distribution license. Contact the
+maintainer before reusing, modifying or redistributing the code. Some files
+under [`mac-agent/`](mac-agent/) carry their own attribution and license terms,
+documented in that directory's README.
