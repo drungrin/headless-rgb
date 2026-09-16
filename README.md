@@ -34,7 +34,7 @@ or any other cooling parameter.
 | Linux | Beelight V3/AT32 (`2e3c:5740`) | 33 pixels, direct serial protocol |
 | Windows | Beelight V3/AT32 (`2e3c:5740`) | the same strip, through the SignalRGB add-on |
 | Linux | Corsair Vengeance RGB DDR5 | 12 LEDs per module, through OpenRGB |
-| Linux | ASUS PRIME Z690-P Aura (`0b05:19af`) | Asiahorse Lightsaber-X, 24 LEDs on `Aura Addressable 2` |
+| Linux | ASUS PRIME Z690-P Aura (`0b05:19af`) | Asiahorse Lightsaber-X, 26 LEDs on `Aura Addressable 2` |
 | Linux | Corsair iCUE LINK System Hub (`1b1c:0c3f`) | six LX120/LX120-R/LX140-R fans, 18 LEDs per fan |
 | macOS | Corsair K70 MAX | 116 lit keys (142 hardware channels), direct HID |
 | macOS | Corsair MM700 RGB | 3 zones, direct HID |
@@ -323,13 +323,40 @@ python tools/sync_addon.py components ~/Documents/WhirlwindFX/Components
 ```
 
 Restart SignalRGB, open the **ASUS PRIME Z690-P** device, and assign
-**Asiahorse Lightsaber-X - 24 LEDs** to the addressable channel the strip is
+**Asiahorse Lightsaber-X - 26 LEDs** to the addressable channel the strip is
 wired to. The board exposes three; the strip is on the second addressable
 header, which is `Aura Addressable 2` in OpenRGB terms.
 
-The LED count is the same 24 the Linux path uses
+The LED count is the same 26 the Linux path uses
 (`headless_lights.aura.ASIAHORSE_LED_COUNT`), so both machines address the strip
 identically.
+
+### Canvas layouts
+
+SignalRGB stores everything in the registry as Qt QSettings, under
+`HKCU\Software\WhirlwindFX\SignalRgb`; a layout is one subkey of `layouts`
+holding a binary `@Variant(...)` blob per device. `tools/signalrgb_layout.py`
+writes them, because two of the arrangements here are computed rather than
+arranged by eye:
+
+```bash
+python tools/signalrgb_layout.py --list
+python tools/signalrgb_layout.py spectrum desk --dry-run
+python tools/signalrgb_layout.py spectrum desk     # SignalRGB must be closed
+```
+
+| Layout | What it is for | Watercolor settings |
+| --- | --- | --- |
+| **Spectrum** | Reproduces the Linux look. Each device is placed at the fraction of the canvas its palette offset in `effects.py` corresponds to, and sized to its span, so the devices show different parts of the spectrum at the same instant instead of all turning one colour together. | Spread 23, Tilt 0 |
+| **Desk** | Where the hardware actually is: the strip along the wall, the case on the right, the peripherals on the pad. One cycle across the room, so a device shows the share of the palette it physically occupies. | Spread 11, Tilt 26 |
+
+The tool never modifies an existing layout; it only creates new ones. Export
+`HKCU\Software\WhirlwindFX` first if you want a way back, and keep that file
+outside the repository — it carries account state.
+
+One limitation worth stating: a component is a straight line of LEDs, so the
+Asiahorse, which runs along the top of the motherboard and turns down the right
+side, is represented by its top run only.
 
 ### Beelight strip on Windows
 

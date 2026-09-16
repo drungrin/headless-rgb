@@ -1,10 +1,10 @@
 {
   "ProductName": "Asiahorse Lightsaber-X",
-  "DisplayName": "Asiahorse Lightsaber-X - 24 LEDs",
+  "DisplayName": "Asiahorse Lightsaber-X - 26 LEDs",
   "Brand": "Asiahorse",
   "Type": "Strip",
-  "LedCount": 24,
-  "Width": 24,
+  "LedCount": 26,
+  "Width": 26,
   "Height": 1,
   "LedMapping": [
     0,
@@ -30,7 +30,9 @@
     20,
     21,
     22,
-    23
+    23,
+    24,
+    25
   ],
   "LedCoordinates": [
     [
@@ -128,6 +130,14 @@
     [
       23,
       0
+    ],
+    [
+      24,
+      0
+    ],
+    [
+      25,
+      0
     ]
   ],
   "LedNames": [
@@ -154,7 +164,9 @@
     "Led 21",
     "Led 22",
     "Led 23",
-    "Led 24"
+    "Led 24",
+    "Led 25",
+    "Led 26"
   ],
   "ImageUrl": "https://assets.signalrgb.com/devices/default/misc/led-strip.png"
 }

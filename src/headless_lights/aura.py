@@ -7,7 +7,7 @@ from headless_lights.ram import OpenRgbDevice, parse_device_list
 
 AURA_DEVICE_NAME = "ASUS PRIME Z690-P"
 ASIAHORSE_ZONE = 2
-ASIAHORSE_LED_COUNT = 24
+ASIAHORSE_LED_COUNT = 26
 
 
 def aura_devices(*, timeout: float = 20.0) -> list[OpenRgbDevice]:
