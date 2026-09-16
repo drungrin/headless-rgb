@@ -1,0 +1,218 @@
+<head>
+  <title>Stranger Things</title>
+
+  <meta description="A blue and purple base under red waves and falling rain, with the periodic flash from the profile. Phase-locked to the wall clock, so machines running the same effect stay in step." />
+  <meta publisher="headless-lights" />
+
+  <meta property="spread" label="Spread" type="number" min="5" max="60" default="25" />
+  <meta property="tilt" label="Downward Tilt" type="number" min="0" max="40" default="17" />
+  <meta property="lanes" label="Lanes" type="number" min="1" max="12" default="6" />
+  <meta property="detail" label="Rain Detail" type="number" min="64" max="480" default="320" />
+</head>
+
+<body style="margin: 0; padding: 0; background: black">
+  <canvas id="exCanvas" width="320" height="200"></canvas>
+</body>
+
+<script>
+  // Stranger Things, ported from headless_lights.effects.stranger_things_color.
+  //
+  // The same effect is rendered by the Python controller on the Linux PC and by
+  // the C++ agent on the Mac, all three taking their phase from the Unix clock.
+  // tests/test_stranger_effect.py decodes what this file draws and compares
+  // every gradient stop against the Python implementation.
+  //
+  // Like Borderlands this takes a `lane`, so it paints one gradient per lane
+  // band; the lane is derived from vertical position the way the K70 does it in
+  // macstream.py.
+  //
+  // Unlike either of the others it also has fine spatial detail. The two rain
+  // layers run at 7x and 11x the position frequency, and the narrower peak is
+  // about 0.004 position units wide -- under one pixel on a 320-wide canvas at
+  // the default Spread. No canvas effect can carry that: on Linux the function
+  // is sampled once per LED, here it is sampled once per canvas pixel and the
+  // devices sample the canvas. The slow layers are exact either way; the rain
+  // reads as a sparkle whose grain depends on Spread rather than as the same
+  // drops the per-LED renderers produce. Lowering Spread widens it.
+
+  var c = document.getElementById("exCanvas");
+  var ctx = c.getContext("2d");
+  var width = 320;
+  var height = 200;
+
+  // effects.py STRANGER_FLASH_STOPS
+  var FLASH_STOPS = [
+    [0.6270491803278688, [128, 43, 36], 1.0],
+    [0.6516393442622951, [128, 0, 0], 0.0],
+    [0.6536885245901639, [128, 0, 0], 1.0],
+    [0.6762295081967213, [128, 0, 0], 0.27451],
+    [0.7028688524590164, [128, 0, 0], 0.290196],
+    [0.7110655737704918, [128, 43, 36], 1.0],
+    [0.7356557377049180, [128, 0, 0], 1.0],
+    [0.7561475409836066, [128, 0, 0], 0.0],
+  ];
+
+  // effects.py _mix_color
+  function mixColor(left, right, amount) {
+    var out = [0, 0, 0];
+    for (var channel = 0; channel < 3; channel++) {
+      out[channel] = Math.round(
+        left[channel] * (1.0 - amount) + right[channel] * amount
+      );
+    }
+    return out;
+  }
+
+  // effects.py _screen_color
+  function screenColor(base, layer, opacity) {
+    var clamped = Math.max(0.0, Math.min(1.0, opacity));
+    var out = [0, 0, 0];
+    for (var channel = 0; channel < 3; channel++) {
+      out[channel] = Math.round(
+        255 - ((255 - base[channel]) * (255 - layer[channel] * clamped)) / 255
+      );
+    }
+    return out;
+  }
+
+  // effects.py _circular_peak
+  function circularPeak(phase, center, peakWidth) {
+    var wrapped = (phase - center + 0.5) % 1.0;
+    if (wrapped < 0) {
+      wrapped += 1.0;
+    }
+    var distance = Math.abs(wrapped - 0.5);
+    if (distance >= peakWidth) {
+      return 0.0;
+    }
+    var normalized = 1.0 - distance / peakWidth;
+    return normalized * normalized * (3.0 - 2.0 * normalized);
+  }
+
+  function wrap(value) {
+    var wrapped = value % 1.0;
+    return wrapped < 0 ? wrapped + 1.0 : wrapped;
+  }
+
+  // effects.py _stranger_flash. Depends only on the clock, so it is evaluated
+  // once per frame and handed to every stop rather than recomputed 2000 times.
+  function strangerFlash(elapsed) {
+    var phase = wrap((elapsed % 7.0) / 7.0);
+    if (phase < FLASH_STOPS[0][0] || phase > FLASH_STOPS[FLASH_STOPS.length - 1][0]) {
+      return { color: [0, 0, 0], opacity: 0.0 };
+    }
+    for (var index = 0; index < FLASH_STOPS.length - 1; index++) {
+      var left = FLASH_STOPS[index];
+      var right = FLASH_STOPS[index + 1];
+      if (left[0] <= phase && phase <= right[0]) {
+        var amount = (phase - left[0]) / (right[0] - left[0]);
+        return {
+          color: mixColor(left[1], right[1], amount),
+          opacity: left[2] * (1.0 - amount) + right[2] * amount,
+        };
+      }
+    }
+    return { color: [0, 0, 0], opacity: 0.0 };
+  }
+
+  // effects.py stranger_things_color
+  function strangerThingsColor(position, elapsed, lane, flash) {
+    var purpleAmount =
+      0.5 + 0.5 * Math.sin(2.0 * Math.PI * (position * 0.73 + elapsed / 8.5));
+    var color = mixColor([6, 4, 23], [10, 4, 46], purpleAmount);
+
+    var redWaveFast = circularPeak(
+      wrap(position - elapsed / 4.8),
+      0.18 + (lane % 3) * 0.19,
+      0.24
+    );
+    var redWaveSlow = circularPeak(
+      wrap(position - elapsed / 9.5),
+      0.71 - (lane % 2) * 0.17,
+      0.18
+    );
+    color = screenColor(color, [125, 0, 0], redWaveFast * 0.92);
+    color = screenColor(color, [125, 0, 1], redWaveSlow * 0.72);
+
+    var rainPhase1 = wrap(position * 7.0 + elapsed * 0.82 + lane * 0.37);
+    var rainPhase2 = wrap(position * 11.0 + elapsed * 0.57 + lane * 0.61);
+    color = screenColor(color, [128, 0, 0], circularPeak(rainPhase1, 0.08, 0.065) * 0.9);
+    color = screenColor(color, [64, 0, 0], circularPeak(rainPhase2, 0.56, 0.045) * 0.85);
+
+    return screenColor(color, flash.color, flash.opacity);
+  }
+
+  function spanX() {
+    return spread / 10.0;
+  }
+
+  function spanY() {
+    return (spanX() * tilt) / 100.0;
+  }
+
+  function laneCount() {
+    return Math.max(1, Math.round(lanes));
+  }
+
+  function stopCount() {
+    return Math.max(2, Math.round(detail));
+  }
+
+  // macstream.py uses lane = round(y * 5) over a normalised 0..1 height, which
+  // is round(y * (lanes - 1)) here, so the first and last bands are half width.
+  function bandEdge(index, count) {
+    if (count < 2) {
+      return index === 0 ? 0.0 : 1.0;
+    }
+    return Math.min(1.0, Math.max(0.0, (index - 0.5) / (count - 1)));
+  }
+
+  function draw() {
+    var sx = spanX();
+    var sy = spanY();
+    var count = laneCount();
+    var stops = stopCount();
+    var elapsed = Date.now() / 1000.0;
+    var flash = strangerFlash(elapsed);
+
+    var gx = sx / width;
+    var gy = sy / height;
+    var squared = gx * gx + gy * gy;
+    var total = sx + sy;
+    var scale = squared === 0 ? 0 : total / squared;
+
+    for (var lane = 0; lane < count; lane++) {
+      var top = bandEdge(lane, count) * height;
+      var bottom = bandEdge(lane + 1, count) * height;
+      if (bottom <= top) {
+        continue;
+      }
+
+      var fill;
+      if (squared === 0) {
+        var flat = strangerThingsColor(0, elapsed, lane, flash);
+        fill = "rgb(" + flat[0] + ", " + flat[1] + ", " + flat[2] + ")";
+      } else {
+        fill = ctx.createLinearGradient(0, 0, gx * scale, gy * scale);
+        for (var stop = 0; stop <= stops; stop++) {
+          var offset = stop / stops;
+          var color = strangerThingsColor(offset * total, elapsed, lane, flash);
+          fill.addColorStop(
+            offset,
+            "rgb(" + color[0] + ", " + color[1] + ", " + color[2] + ")"
+          );
+        }
+      }
+
+      ctx.fillStyle = fill;
+      ctx.fillRect(0, top, width, bottom - top);
+    }
+  }
+
+  function update() {
+    draw();
+    window.requestAnimationFrame(update);
+  }
+
+  window.requestAnimationFrame(update);
+</script>

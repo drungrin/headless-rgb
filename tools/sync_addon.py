@@ -45,6 +45,7 @@ ADDONS: dict[str, dict[str, str]] = {
     "effects": {
         "watercolor.html": "signalrgb/effects/watercolor.html",
         "borderlands4.html": "signalrgb/effects/borderlands4.html",
+        "stranger-things.html": "signalrgb/effects/stranger-things.html",
     },
     "components": {
         "Asiahorse_Lightsaber_X.json": "signalrgb/components/Asiahorse_Lightsaber_X.json",
