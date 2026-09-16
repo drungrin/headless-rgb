@@ -76,7 +76,10 @@ Agent behaviour:
 - **Coalescing** — only the newest frame per device is applied. A device that
   cannot keep up drops frames instead of accumulating latency.
 - **Pacing** — a minimum interval per device (K70 33 ms, MM700 and Scimitar
-  16 ms, G560 40 ms). The K70 costs four blocking HID round trips per frame.
+  16 ms, G560 100 ms). The G560 is four request/reply HID transactions per
+  frame. At the old ~15 fps, macOS rejected 12.6% of its reports and eventually
+  reset the whole USB device, including audio; 10 fps leaves protocol and USB
+  headroom without a visible loss on four ambient speaker zones.
 - **Fallback** — after 3 s without frames, the device returns to the local
   effect configured in the LaunchAgent.
 - **Precedence** — a `COLOR` or `EFFECT` on port 7531 reclaims all four devices
@@ -176,3 +179,24 @@ later as `scimitar=error`.
 The Scimitar backend treats an empty response as a timeout and invalidates the
 RGB endpoint. When the mouse returns to wireless, the agent retries after two
 seconds, restores the animation and keeps the side-button mapping active.
+
+## G560 USB stability
+
+Each G560 frame is four HID transactions, one per zone. The device answers every
+report; that answer is flow control, not optional telemetry. OpenRGB sends one
+report and blocks for its answer before sending the next. The agent originally
+put the descriptor in non-blocking mode and only drained answers that had already
+arrived, so another zone routinely went out first.
+
+The failure was visible in macOS's `IOHIDDevice` `DebugState`. Under SignalRGB at
+about 15 fps, `SetReportFailCount` grew by 157 over 1,245 reports in 20 seconds:
+**12.61% rejected**. The G560 occasionally reset as a complete USB device, which
+made audio move to the Mac mini and lighting return to firmware default until it
+re-enumerated. Powering the two-level hub chain reduced how often that happened,
+but did not change the rejection ratio (12.66% earlier, 12.92% later), so power
+was only one half of the diagnosis.
+
+The backend now waits up to 20 ms for each reply and the stream is capped at
+10 fps. After the change, macOS counted 1,596 reports over 60 seconds with
+**zero failures**. Keep the intermediate hub externally powered as well: the
+G560 shares that branch with the Yeti Nano, K70, MM700 and Slipstream receiver.

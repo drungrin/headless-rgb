@@ -52,9 +52,13 @@ for (const model of MODELS) {
 	output.layout = {
 		wireIndex: plugin.__testLayout.k70.wireIndex,
 		ledPositions: plugin.__testLayout.k70.ledPositions,
+		intervals: {},
 	};
-	for (const model of ["mm700", "g560", "scimitar"]) {
-		output.layout[model] = plugin.__testLayout[model].ledPositions;
+	for (const model of ["k70", "mm700", "g560", "scimitar"]) {
+		output.layout.intervals[model] = plugin.__testLayout[model].intervalMs;
+		if (model !== "k70") {
+			output.layout[model] = plugin.__testLayout[model].ledPositions;
+		}
 	}
 }
 
