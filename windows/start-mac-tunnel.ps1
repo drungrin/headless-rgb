@@ -30,6 +30,25 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Task Scheduler may create a console host even when powershell.exe receives
+# -WindowStyle Hidden, especially after console child processes are attached.
+# Hide the actual console window explicitly before writing any status output.
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class HeadlessConsole {
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}
+'@
+$console = [HeadlessConsole]::GetConsoleWindow()
+if ($console -ne [IntPtr]::Zero) {
+    [HeadlessConsole]::ShowWindow($console, 0) | Out-Null
+}
+
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $bridgeScript = Join-Path $scriptDir 'signalrgb-mac-bridge.py'
 $logDir = Join-Path $env:LOCALAPPDATA 'headless-lights'
@@ -89,7 +108,7 @@ try {
                 $tunnel.Dispose()
             }
             $tunnel = Start-Process -FilePath $ssh -ArgumentList $sshArguments `
-                -NoNewWindow -RedirectStandardError $sshErrorLog -PassThru
+                -WindowStyle Hidden -RedirectStandardError $sshErrorLog -PassThru
             Write-Status "ssh tunnel started (pid $($tunnel.Id))"
         }
 
@@ -99,7 +118,7 @@ try {
                 $bridge.Dispose()
             }
             $bridge = Start-Process -FilePath $python -ArgumentList $bridgeArguments `
-                -NoNewWindow -RedirectStandardOutput $bridgeLog `
+                -WindowStyle Hidden -RedirectStandardOutput $bridgeLog `
                 -RedirectStandardError $bridgeErrorLog -PassThru
             Write-Status "UDP bridge started (pid $($bridge.Id))"
         }
