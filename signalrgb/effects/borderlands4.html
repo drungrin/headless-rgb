@@ -1,0 +1,178 @@
+<head>
+  <title>Borderlands 4</title>
+
+  <meta description="Continuous red, orange and gold layers pulsing across the canvas. Phase-locked to the wall clock, so machines running the same effect stay in step." />
+  <meta publisher="headless-lights" />
+
+  <meta property="spread" label="Spread" type="number" min="5" max="60" default="25" />
+  <meta property="tilt" label="Downward Tilt" type="number" min="0" max="40" default="17" />
+  <meta property="lanes" label="Lanes" type="number" min="1" max="12" default="6" />
+</head>
+
+<body style="margin: 0; padding: 0; background: black">
+  <canvas id="exCanvas" width="320" height="200"></canvas>
+</body>
+
+<script>
+  // Borderlands 4, ported from headless_lights.effects.borderlands4_color.
+  //
+  // The same effect is rendered by the Python controller on the Linux PC and by
+  // the C++ agent on the Mac, all three taking their phase from the Unix clock.
+  // tests/test_borderlands_effect.py decodes what this file draws and compares
+  // every gradient stop against the Python implementation.
+  //
+  // Unlike Watercolor, this effect takes a second argument: a `lane`, a small
+  // integer that shifts the pulse and both waves. It is not decoration -- it is
+  // what stops every zone from pulsing in unison. A canvas effect cannot know
+  // which device it is painting, so the lane is derived from the vertical
+  // position exactly as the K70 does it in macstream.py: lane = round(y * 5).
+  //
+  // That makes the colour a step function of y, so this cannot be one gradient
+  // the way Watercolor is. It is one gradient per lane, each filling its own
+  // horizontal band.
+
+  var c = document.getElementById("exCanvas");
+  var ctx = c.getContext("2d");
+  var width = 320;
+  var height = 200;
+
+  // Resolution of each band's gradient. The waves are smoothstep peaks about
+  // 0.4 position units wide, so 96 stops put roughly a dozen inside each edge.
+  var STOPS = 96;
+
+  // effects.py _mix_color
+  function mixColor(left, right, amount) {
+    var out = [0, 0, 0];
+    for (var channel = 0; channel < 3; channel++) {
+      out[channel] = Math.round(
+        left[channel] * (1.0 - amount) + right[channel] * amount
+      );
+    }
+    return out;
+  }
+
+  // effects.py _screen_color
+  function screenColor(base, layer, opacity) {
+    var clamped = Math.max(0.0, Math.min(1.0, opacity));
+    var out = [0, 0, 0];
+    for (var channel = 0; channel < 3; channel++) {
+      out[channel] = Math.round(
+        255 - ((255 - base[channel]) * (255 - layer[channel] * clamped)) / 255
+      );
+    }
+    return out;
+  }
+
+  // effects.py _circular_peak
+  function circularPeak(phase, center, peakWidth) {
+    var wrapped = (phase - center + 0.5) % 1.0;
+    if (wrapped < 0) {
+      wrapped += 1.0;
+    }
+    var distance = Math.abs(wrapped - 0.5);
+    if (distance >= peakWidth) {
+      return 0.0;
+    }
+    var normalized = 1.0 - distance / peakWidth;
+    return normalized * normalized * (3.0 - 2.0 * normalized);
+  }
+
+  function wrap(value) {
+    var wrapped = value % 1.0;
+    return wrapped < 0 ? wrapped + 1.0 : wrapped;
+  }
+
+  // effects.py borderlands4_color
+  function borderlands4Color(position, elapsed, lane) {
+    var redPulse =
+      0.18 +
+      (0.12 * (1.0 + Math.sin(2.0 * Math.PI * (elapsed / 3.0 + lane * 0.11)))) / 2.0;
+    var color = mixColor([192, 0, 2], [255, 18, 0], redPulse);
+
+    var orangeWave = circularPeak(
+      wrap(position - elapsed / 5.0 + lane * 0.071),
+      0.36,
+      0.25
+    );
+    var goldWave = circularPeak(
+      wrap(position - elapsed / 7.3 - lane * 0.043),
+      0.74,
+      0.17
+    );
+
+    color = screenColor(color, [255, 125, 0], orangeWave * 0.92);
+    return screenColor(color, [250, 180, 0], goldWave * 0.76);
+  }
+
+  function spanX() {
+    return spread / 10.0;
+  }
+
+  function spanY() {
+    return (spanX() * tilt) / 100.0;
+  }
+
+  function laneCount() {
+    return Math.max(1, Math.round(lanes));
+  }
+
+  // macstream.py uses lane = round(y * 5) over a normalised 0..1 height, which
+  // is round(y * (lanes - 1)) here. The first and last bands are therefore half
+  // width, and these edges reproduce that exactly rather than dividing evenly.
+  function bandEdge(index, count) {
+    if (count < 2) {
+      return index === 0 ? 0.0 : 1.0;
+    }
+    return Math.min(1.0, Math.max(0.0, (index - 0.5) / (count - 1)));
+  }
+
+  function draw() {
+    var sx = spanX();
+    var sy = spanY();
+    var count = laneCount();
+    var elapsed = Date.now() / 1000.0;
+
+    // Same geometry as Watercolor: the gradient axis is parallel to the
+    // gradient of position(x, y) = sx * x / width + sy * y / height, scaled so
+    // the gradient's own 0..1 runs from position 0 to the canvas corner.
+    var gx = sx / width;
+    var gy = sy / height;
+    var squared = gx * gx + gy * gy;
+    var total = sx + sy;
+    var scale = squared === 0 ? 0 : total / squared;
+
+    for (var lane = 0; lane < count; lane++) {
+      var top = bandEdge(lane, count) * height;
+      var bottom = bandEdge(lane + 1, count) * height;
+      if (bottom <= top) {
+        continue;
+      }
+
+      var fill;
+      if (squared === 0) {
+        var flat = borderlands4Color(0, elapsed, lane);
+        fill = "rgb(" + flat[0] + ", " + flat[1] + ", " + flat[2] + ")";
+      } else {
+        fill = ctx.createLinearGradient(0, 0, gx * scale, gy * scale);
+        for (var stop = 0; stop <= STOPS; stop++) {
+          var offset = stop / STOPS;
+          var color = borderlands4Color(offset * total, elapsed, lane);
+          fill.addColorStop(
+            offset,
+            "rgb(" + color[0] + ", " + color[1] + ", " + color[2] + ")"
+          );
+        }
+      }
+
+      ctx.fillStyle = fill;
+      ctx.fillRect(0, top, width, bottom - top);
+    }
+  }
+
+  function update() {
+    draw();
+    window.requestAnimationFrame(update);
+  }
+
+  window.requestAnimationFrame(update);
+</script>

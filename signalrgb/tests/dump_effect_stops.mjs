@@ -1,22 +1,26 @@
-// Run signalrgb/effects/watercolor.html outside SignalRGB and print, as JSON,
-// the gradient it builds. tests/test_watercolor_effect.py compares every stop
-// against headless_lights.effects.watercolor_color, which is what keeps the
-// SignalRGB effect and the Python and C++ renderers from drifting apart.
+// Run a SignalRGB effect outside SignalRGB and print, as JSON, everything it
+// draws. tests/test_watercolor_effect.py and tests/test_borderlands_effect.py
+// compare those gradients against this project's Python renderers.
 //
-//   node signalrgb/tests/dump_watercolor_stops.mjs
+//   node signalrgb/tests/dump_effect_stops.mjs signalrgb/effects/watercolor.html
 //
-// The effect is a plain HTML file with no module system, so this extracts its
+// Scenarios arrive on stdin as JSON:
+//
+//   {"scenarios": {"defaults": {"globals": {"spread": 25}, "times": [1758000000]}}}
+//
+// An effect is a plain HTML file with no module system, so this extracts its
 // <script> block and runs it in a vm context against fake DOM objects, the way
 // SignalRGB's Ultralight runtime would.
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import vm from "node:vm";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const EFFECT = join(HERE, "..", "effects", "watercolor.html");
-const html = readFileSync(EFFECT, "utf8");
+const effectPath = process.argv[2];
+if (!effectPath) {
+	throw new Error("usage: dump_effect_stops.mjs <effect.html>");
+}
+const html = readFileSync(effectPath, "utf8");
+const request = JSON.parse(readFileSync(0, "utf8"));
 
 // --- what SignalRGB reads out of the file ----------------------------------
 
@@ -74,8 +78,8 @@ function makeContext(record) {
 			};
 		},
 		fillRect(x, y, w, h) {
-			// Record what was actually painted, and with which fill. A gradient
-			// built but never used would otherwise pass every other assertion.
+			// Record what was painted and with which fill. A gradient built but
+			// never used would otherwise pass every other assertion.
 			const style = this.fillStyle;
 			record.fills.push({
 				x, y, width: w, height: h,
@@ -91,23 +95,23 @@ function makeContext(record) {
 	};
 }
 
-// Renders `times.length` frames, one per stubbed Unix timestamp, and returns
-// everything the effect drew.
-function render({ spread, tilt, times }) {
+function render({ globals, times }) {
 	const record = { gradients: [], fills: [] };
 	const context = makeContext(record);
 	const reads = new Set();
 
 	let frameCallback = null;
-	const sandbox = {
-		spread,
-		tilt,
+	const sandbox = Object.assign({}, globals, {
 		Math,
 		Date: { now: () => sandbox.__nowMs },
 		console: { log() {}, clear() {} },
 		document: {
 			getElementById() {
-				return { getContext: () => context, width: CANVAS.width, height: CANVAS.height };
+				return {
+					getContext: () => context,
+					width: CANVAS.width,
+					height: CANVAS.height,
+				};
 			},
 		},
 		window: {
@@ -116,11 +120,11 @@ function render({ spread, tilt, times }) {
 			},
 		},
 		__nowMs: times[0] * 1000,
-	};
+	});
 
 	// `has` returning true routes every bare identifier through `get`, so this
-	// also records which globals the script actually reads. A <meta property>
-	// the script never looks at is a dead setting in the SignalRGB UI.
+	// also records which globals the script reads. A <meta property> the script
+	// never looks at is a dead setting in the SignalRGB UI.
 	const proxied = new Proxy(sandbox, {
 		has: () => true,
 		get(target, key) {
@@ -139,42 +143,33 @@ function render({ spread, tilt, times }) {
 	const frames = [];
 	for (const seconds of times) {
 		sandbox.__nowMs = seconds * 1000;
-		const before = record.gradients.length;
+		const firstGradient = record.gradients.length;
+		const firstFill = record.fills.length;
 		frameCallback();
 		frames.push({
 			elapsed: seconds,
-			gradient: record.gradients[record.gradients.length - 1] || null,
-			newGradients: record.gradients.length - before,
-			fill: record.fills[record.fills.length - 1] || null,
+			// Every gradient and fill this one frame produced, in order. An
+			// effect with per-lane bands makes several of each.
+			gradients: record.gradients.slice(firstGradient),
+			fills: record.fills.slice(firstFill).map((fill) =>
+				Object.assign({}, fill, {
+					gradient: fill.gradient === null ? null : fill.gradient - firstGradient,
+				})
+			),
 		});
 	}
 
-	return {
-		spread,
-		tilt,
-		frames,
-		reads: Array.from(reads).sort(),
-	};
+	return { globals, frames, reads: Array.from(reads).sort() };
 }
 
-// --- scenarios --------------------------------------------------------------
+const output = {
+	title: TITLE,
+	canvas: CANVAS,
+	meta: META,
+	scenarios: {},
+};
+for (const [name, scenario] of Object.entries(request.scenarios)) {
+	output.scenarios[name] = render(scenario);
+}
 
-// A fixed, arbitrary Unix time and the same instant 12 s later: 12 s is the
-// effect's own drift period (elapsed / 12.0), so the two frames must differ.
-const T0 = 1758000000;
-
-process.stdout.write(
-	JSON.stringify({
-		title: TITLE,
-		canvas: CANVAS,
-		meta: META,
-		defaults: render({
-			spread: Number(META.find((entry) => entry.property === "spread").default),
-			tilt: Number(META.find((entry) => entry.property === "tilt").default),
-			times: [T0, T0 + 12],
-		}),
-		flat: render({ spread: 25, tilt: 0, times: [T0] }),
-		wide: render({ spread: 60, tilt: 17, times: [T0] }),
-		narrow: render({ spread: 5, tilt: 40, times: [T0] }),
-	}),
-);
+process.stdout.write(JSON.stringify(output));

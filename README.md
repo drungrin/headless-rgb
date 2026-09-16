@@ -21,8 +21,8 @@ iCUE, and no graphical session required on the Linux side.
 - Automatic Scimitar wireless recovery after a disconnect or timeout.
 - Two SignalRGB add-ons: one streams the Windows canvas to the Mac peripherals
   per LED, the other drives the Beelight strip straight from Windows.
-- A SignalRGB build of the Watercolor Spectrum effect, in the same clock phase
-  as the Linux and macOS renderers.
+- SignalRGB builds of the Watercolor Spectrum and Borderlands 4 effects, in the
+  same clock phase as the Linux and macOS renderers.
 
 This project controls lighting only. It never changes fan speeds, thermal curves
 or any other cooling parameter.
@@ -169,7 +169,7 @@ animations stay aligned.
 | --- | --- |
 | `watercolor` | Soft bands of cyan, blue, violet, magenta, pink and pale yellow (also available inside SignalRGB) |
 | `stranger-things` | Blue/purple base with red rain and waves, plus periodic flashes |
-| `borderlands-4` | Continuous red, orange and gold layers |
+| `borderlands-4` | Continuous red, orange and gold layers (also available inside SignalRGB) |
 
 Run a temporary preview:
 
@@ -283,33 +283,43 @@ headless-lights mac-stream --color ff6600 --device k70 --fps 30
 
 The frame format is documented in [`mac-agent/README.md`](mac-agent/README.md).
 
-### Watercolor inside SignalRGB
+### The effects inside SignalRGB
 
-The same Watercolor Spectrum also exists as a SignalRGB effect, so the strip and
-the Mac peripherals can be painted from Windows without giving up the look. It
-is a plain HTML file — SignalRGB effects are not add-ons and need no repository:
+Watercolor Spectrum and Borderlands 4 also exist as SignalRGB effects, so the
+strip and the Mac peripherals can be painted from Windows without giving up the
+look. They are plain HTML files — SignalRGB effects are not add-ons and need no
+repository:
 
 ```bash
 python tools/sync_addon.py effects ~/Documents/WhirlwindFX/Effects
 ```
 
-Restart SignalRGB and pick **Watercolor Spectrum**.
+Restart SignalRGB and pick **Watercolor Spectrum** or **Borderlands 4**.
 
-It takes its phase from the wall clock, exactly as `effects.py` does, so all
+Both take their phase from the wall clock, exactly as `effects.py` does, so all
 three renderers agree on what the colour should be at a given instant. The
 practical payoff is the fallback: when streaming stops and the Mac returns to its
 own effect after three seconds, the peripherals do not jump.
 
-Two settings, because an effect cannot see where one device ends and the next
-begins:
+They share two settings, because an effect cannot see where one device ends and
+the next begins:
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | Spread | `25` | Palette cycles across the canvas, in tenths. Raise it until a keyboard-sized device shows about one full cycle. |
-| Downward Tilt | `17` | Tilt as a percentage of the horizontal span. `17` reproduces the K70's own `0.18 / 1.05` diagonal. |
+| Downward Tilt | `17` | Tilt as a percentage of the horizontal span. `17` reproduces the K70's own diagonal. |
 
 `Spread` depends on how large your devices are on the SignalRGB canvas, so the
-default is a starting point to tune, not a constant.
+default is a starting point to tune, not a constant. The
+[canvas layouts](#canvas-layouts) below each come with the values that suit them.
+
+Borderlands 4 has a third setting, **Lanes** (default `6`). The Linux and macOS
+renderers pass each zone a *lane* — a small integer that shifts the red pulse and
+both waves, so the zones do not beat in unison. A canvas effect cannot look up
+which device it is painting, so it derives the lane from vertical position the
+way the K70 does (`lane = round(y * 5)`) and paints one gradient band per lane.
+Raising Lanes makes the variation finer; setting it to `1` removes it and the
+whole canvas pulses together.
 
 ### Asiahorse strip inside SignalRGB
 
