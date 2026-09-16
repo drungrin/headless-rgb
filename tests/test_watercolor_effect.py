@@ -156,7 +156,7 @@ class WatercolorEffectTests(unittest.TestCase):
     def test_the_effect_is_named_and_attributed(self) -> None:
         self.assertEqual(self.dump["title"], "Watercolor Spectrum")
         source = (EFFECTS_DIR / EFFECT).read_text(encoding="utf-8")
-        self.assertIn('publisher="headless-lights"', source)
+        self.assertIn('publisher="drungrin"', source)
 
     def test_every_declared_setting_is_actually_read(self) -> None:
         """A <meta property> the script never reads is a dead control in the UI."""

@@ -231,7 +231,7 @@ class StrangerEffectTests(unittest.TestCase):
     def test_the_effect_is_named_and_attributed(self) -> None:
         self.assertEqual(self.dump["title"], "Stranger Things")
         source = (EFFECTS_DIR / EFFECT).read_text(encoding="utf-8")
-        self.assertIn('publisher="headless-lights"', source)
+        self.assertIn('publisher="drungrin"', source)
 
     def test_every_declared_setting_is_actually_read(self) -> None:
         declared = {entry["property"] for entry in self.dump["meta"]}
