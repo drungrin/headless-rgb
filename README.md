@@ -21,6 +21,8 @@ iCUE, and no graphical session required on the Linux side.
 - Automatic Scimitar wireless recovery after a disconnect or timeout.
 - Two SignalRGB add-ons: one streams the Windows canvas to the Mac peripherals
   per LED, the other drives the Beelight strip straight from Windows.
+- A SignalRGB build of the Watercolor Spectrum effect, in the same clock phase
+  as the Linux and macOS renderers.
 
 This project controls lighting only. It never changes fan speeds, thermal curves
 or any other cooling parameter.
@@ -48,7 +50,7 @@ are not guaranteed.
 | --- | --- |
 | `src/headless_lights/` | Python package and the `headless-lights` CLI |
 | `mac-agent/` | C++ agent for macOS, its wire protocol and its test suite |
-| `signalrgb/` | Canonical source of both SignalRGB add-ons, plus their test harnesses |
+| `signalrgb/` | Canonical source of both SignalRGB add-ons and the effect, plus their test harnesses |
 | `windows/` | SSH tunnel supervisor and the UDP-to-TCP bridge |
 | `tools/` | K70 layout generator, add-on sync and stream capture helpers |
 | `udev/` | udev rule scoping direct access to the identified controllers |
@@ -160,12 +162,12 @@ configured Aura zone.
 
 ### Animated effects
 
-Effects use Unix time as a shared phase, so the Linux and macOS animations stay
-aligned.
+Effects use Unix time as a shared phase, so the Linux, macOS and SignalRGB
+animations stay aligned.
 
 | Effect | Description |
 | --- | --- |
-| `watercolor` | Soft bands of cyan, blue, violet, magenta, pink and pale yellow |
+| `watercolor` | Soft bands of cyan, blue, violet, magenta, pink and pale yellow (also available inside SignalRGB) |
 | `stranger-things` | Blue/purple base with red rain and waves, plus periodic flashes |
 | `borderlands-4` | Continuous red, orange and gold layers |
 
@@ -281,6 +283,34 @@ headless-lights mac-stream --color ff6600 --device k70 --fps 30
 
 The frame format is documented in [`mac-agent/README.md`](mac-agent/README.md).
 
+### Watercolor inside SignalRGB
+
+The same Watercolor Spectrum also exists as a SignalRGB effect, so the strip and
+the Mac peripherals can be painted from Windows without giving up the look. It
+is a plain HTML file — SignalRGB effects are not add-ons and need no repository:
+
+```bash
+python tools/sync_addon.py effects ~/Documents/WhirlwindFX/Effects
+```
+
+Restart SignalRGB and pick **Watercolor Spectrum**.
+
+It takes its phase from the wall clock, exactly as `effects.py` does, so all
+three renderers agree on what the colour should be at a given instant. The
+practical payoff is the fallback: when streaming stops and the Mac returns to its
+own effect after three seconds, the peripherals do not jump.
+
+Two settings, because an effect cannot see where one device ends and the next
+begins:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| Spread | `25` | Palette cycles across the canvas, in tenths. Raise it until a keyboard-sized device shows about one full cycle. |
+| Downward Tilt | `17` | Tilt as a percentage of the horizontal span. `17` reproduces the K70's own `0.18 / 1.05` diagonal. |
+
+`Spread` depends on how large your devices are on the SignalRGB canvas, so the
+default is a starting point to tune, not a constant.
+
 ### Beelight strip on Windows
 
 The strip plugs into the Windows PC, where it enumerates as a plain CDC serial
@@ -360,6 +390,10 @@ so a plugin and its device cannot drift apart silently:
   serial port, feeds it acknowledgements encoded by
   `headless_lights.beelight.protocol`, and decodes everything it writes back
   with that same module.
+- `tests/test_watercolor_effect.py` runs the effect against a fake canvas and
+  checks every gradient stop it produces against
+  `headless_lights.effects.watercolor_color` at the same instant, so the
+  SignalRGB and Python renderings cannot diverge.
 
 Without Node.js, those tests are skipped.
 

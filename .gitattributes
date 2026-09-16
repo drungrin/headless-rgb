@@ -9,6 +9,7 @@
 *.js text eol=lf
 *.mjs text eol=lf
 *.qml text eol=lf
+*.html text eol=lf
 *.md text eol=lf
 *.rules text eol=lf
 

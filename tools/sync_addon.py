@@ -10,6 +10,12 @@ up later as a whole-file diff. This always writes LF.
 
     python tools/sync_addon.py mac ../signalrgb-mac-bridge
     python tools/sync_addon.py beelight ../signalrgb-beelight --check
+
+The "effects" target is not an add-on: SignalRGB reads effects as plain files
+from ~/Documents/WhirlwindFX/Effects, with no repository involved. It lives here
+anyway because the copying and the line endings are the same problem.
+
+    python tools/sync_addon.py effects ~/Documents/WhirlwindFX/Effects
 """
 
 from __future__ import annotations
@@ -29,6 +35,9 @@ ADDONS: dict[str, dict[str, str]] = {
     },
     "beelight": {
         "beelight.js": "signalrgb/beelight.js",
+    },
+    "effects": {
+        "watercolor.html": "signalrgb/effects/watercolor.html",
     },
 }
 
