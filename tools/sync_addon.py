@@ -16,6 +16,12 @@ from ~/Documents/WhirlwindFX/Effects, with no repository involved. It lives here
 anyway because the copying and the line endings are the same problem.
 
     python tools/sync_addon.py effects ~/Documents/WhirlwindFX/Effects
+
+"components" is the same idea for the ARGB strips SignalRGB cannot identify on
+its own: a motherboard's addressable header reports no LED count, so the strip
+plugged into it has to be described by hand.
+
+    python tools/sync_addon.py components ~/Documents/WhirlwindFX/Components
 """
 
 from __future__ import annotations
@@ -38,6 +44,9 @@ ADDONS: dict[str, dict[str, str]] = {
     },
     "effects": {
         "watercolor.html": "signalrgb/effects/watercolor.html",
+    },
+    "components": {
+        "Asiahorse_Lightsaber_X.json": "signalrgb/components/Asiahorse_Lightsaber_X.json",
     },
 }
 

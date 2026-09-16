@@ -311,6 +311,26 @@ begins:
 `Spread` depends on how large your devices are on the SignalRGB canvas, so the
 default is a starting point to tune, not a constant.
 
+### Asiahorse strip inside SignalRGB
+
+A motherboard's addressable header cannot report what is plugged into it, so
+SignalRGB leaves its ARGB channels empty until a **component** describes the
+strip. None of the Asiahorse components SignalRGB ships is the Lightsaber-X —
+they are fans and cables — so this repository carries one:
+
+```bash
+python tools/sync_addon.py components ~/Documents/WhirlwindFX/Components
+```
+
+Restart SignalRGB, open the **ASUS PRIME Z690-P** device, and assign
+**Asiahorse Lightsaber-X - 24 LEDs** to the addressable channel the strip is
+wired to. The board exposes three; the strip is on the second addressable
+header, which is `Aura Addressable 2` in OpenRGB terms.
+
+The LED count is the same 24 the Linux path uses
+(`headless_lights.aura.ASIAHORSE_LED_COUNT`), so both machines address the strip
+identically.
+
 ### Beelight strip on Windows
 
 The strip plugs into the Windows PC, where it enumerates as a plain CDC serial
