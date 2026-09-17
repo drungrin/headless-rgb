@@ -178,3 +178,11 @@ O repositório publicado em
 [`drungrin/signalrgb-corsair-bragi-scimitar`](https://github.com/drungrin/signalrgb-corsair-bragi-scimitar)
 serve para distribuição, não para ser adicionado em Settings → Add-ons; o
 README de lá explica isso.
+
+**Desativar o dispositivo corta só a iluminação.** Confirmado no hardware: com
+o dongle desativado no SignalRGB os botões continuam funcionando. Como a única
+origem das teclas é o `readDeviceNotifications()` no topo do `Render()`, isso
+prova que o `Render()` segue sendo chamado — então "botões sem RGB" é uma
+configuração válida. Vale lembrar que não existe um dispositivo de fábrica ao
+lado do nosso para desativar: é um plugin por `VID:PID`, e o dongle que aparece
+é o do fork.

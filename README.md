@@ -432,6 +432,13 @@ same on both sides of the USB-C switch. Because only the input path is touched,
 changing an effect, a colour or the brightness never disturbs them. They work
 while SignalRGB runs, which is also what holds the mouse in software mode.
 
+Disabling the device in SignalRGB turns its lighting off but leaves the buttons
+working, which is a usable configuration in itself: the presses are read at the
+top of `Render()`, and that keeps being called. Note there is no stock device
+left to disable beside this one — SignalRGB keeps a single plugin per `VID:PID`,
+so this fork replaces the shipped Corsair plugin for the dongle rather than
+running alongside it, and the dongle you see is this one.
+
 That plugin is not written here: it is SignalRGB's own `Corsair_Bragi_Device.js`
 with our patch applied by a script, so a SignalRGB update is one command and a
 readable diff rather than a merge:
