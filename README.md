@@ -18,7 +18,8 @@ iCUE, and no graphical session required on the Linux side.
   - Borderlands 4
 - systemd user services for persistent static colour or effects.
 - A C++ macOS agent that drives peripherals over direct HID, without the iCUE SDK.
-- Automatic Scimitar wireless recovery after a disconnect or timeout.
+- Automatic Scimitar recovery after a wireless timeout, a disconnect or a
+  USB switch hand-over, with no agent restart.
 - Three SignalRGB add-ons: one streams the Windows canvas to the Mac peripherals
   per LED, one drives the Beelight strip straight from Windows, and one gives the
   Scimitar its twelve side buttons back on Windows, where software mode takes
@@ -231,7 +232,10 @@ headless-lights mac-effect stranger-things --host user@mac.local
 
 The Scimitar must stay in software mode to accept animated RGB. In that mode the
 agent restores the 12 side buttons as the keys `1` through `=`, which is why it
-needs Accessibility permission for the agent binary alone.
+needs Accessibility permission for the agent binary alone. Software mode is only
+entered while that mapping is live, and the check is made on every frame: when a
+USB switch hands the dongle to the other machine, the agent drops both the
+listener and the RGB handle, and takes them back when the dongle returns.
 
 ## SignalRGB on Windows
 

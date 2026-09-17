@@ -176,9 +176,40 @@ At the end, `install.sh` reports whether the permission is active
 (`accessibility: granted`), so a break shows up immediately instead of surfacing
 later as `scimitar=error`.
 
+Two things about that grant were measured the hard way on 2026-09-17:
+
+- **Granting it does not reach a running agent.** The process keeps the answer
+  TCC gave it when it launched: after the entry was re-added, the agent went on
+  reporting `reason=accessibility` across three minutes of two-second retries,
+  and one `launchctl kickstart -k` flipped it to `scimitar-buttons=ready`
+  immediately. Always restart the agent after granting.
+- **`install.sh` cannot check the grant over ssh.** TCC answers for the ssh
+  session's responsible process, not for the binary being asked about: a
+  throwaway unsigned binary TCC had never seen also reported `trusted` there. So
+  over ssh the script says nothing and points at the agent's log, which is the
+  only honest witness. Run `install.sh` from a terminal on the Mac itself to get
+  the real `accessibility: granted`.
+
+The agent names which of the two problems it has, because they need different
+fixes: `scimitar-buttons=unavailable reason=accessibility` is this section,
+`reason=no-dongle` is the USB switch pointing at the other machine.
+
 The Scimitar backend treats an empty response as a timeout and invalidates the
 RGB endpoint. When the mouse returns to wireless, the agent retries after two
 seconds, restores the animation and keeps the side-button mapping active.
+
+The dongle disappearing is a different failure, and the one a USB switch causes
+on every hand-over: macOS gives the device a new path when it comes back, so the
+open handle is dead for good. Both the side-button listener and the RGB endpoint
+are therefore closed on the first failure and reopened by enumeration, at most
+once every two seconds. The log reports each transition as
+`scimitar-buttons=ready` or `scimitar-buttons=unavailable reason=no-dongle`.
+
+Because software mode is what takes the side buttons away, the RGB endpoint
+follows the listener: while the buttons are not being mapped, the agent puts the
+mouse back into hardware mode and leaves it there. That is a live check, not a
+decision taken at startup — an agent that started while the switch pointed at
+the other machine still lights the mouse when it comes back.
 
 ## G560 USB stability
 

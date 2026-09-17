@@ -800,8 +800,21 @@ public:
         }
     }
 
+    // Safe to call again at any time. The USB switch takes the dongle away
+    // whenever it points at the other machine, so the listener has to stay
+    // re-openable for the life of the agent; the retry delay keeps a dongle
+    // that is gone for hours from enumerating on every pass.
     bool initialize() {
-        if (!AXIsProcessTrusted()) {
+        if (listener_ != nullptr) {
+            return true;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now < next_retry_) {
+            return false;
+        }
+        next_retry_ = now + kBackendRetryDelay;
+        trusted_ = AXIsProcessTrusted();
+        if (!trusted_) {
             return false;
         }
         hid_device_info* devices =
@@ -818,24 +831,41 @@ public:
             return false;
         }
         listener_ = hid_open_path(path.c_str());
-        return listener_ != nullptr && hid_set_nonblocking(listener_, 1) == 0;
+        if (listener_ == nullptr) {
+            return false;
+        }
+        if (hid_set_nonblocking(listener_, 1) != 0) {
+            hid_close(listener_);
+            listener_ = nullptr;
+            return false;
+        }
+        current_mask_ = 0;
+        return true;
     }
 
     bool ready() const {
         return listener_ != nullptr;
     }
 
+    // The two reasons the listener can be shut need different fixes -- a fresh
+    // Accessibility grant, or the USB switch pointed back at this machine --
+    // and both used to print the same line.
+    const char* unavailable_reason() const {
+        return trusted_ ? "no-dongle" : "accessibility";
+    }
+
+    // Returns whether the side buttons are being mapped right now. A dongle
+    // that went away is not an error: the listener is dropped and reopened
+    // when it comes back.
     bool poll() {
         if (listener_ == nullptr) {
-            return false;
+            return initialize();
         }
         while (true) {
             std::array<unsigned char, 64> data{};
             const int count = hid_read(listener_, data.data(), data.size());
             if (count < 0) {
-                release_all();
-                hid_close(listener_);
-                listener_ = nullptr;
+                drop();
                 return false;
             }
             if (count == 0) {
@@ -883,14 +913,22 @@ private:
         update(0);
     }
 
+    void drop() {
+        release_all();
+        hid_close(listener_);
+        listener_ = nullptr;
+        next_retry_ = std::chrono::steady_clock::now() + kBackendRetryDelay;
+    }
+
     hid_device* listener_ = nullptr;
     std::uint32_t current_mask_ = 0;
+    bool trusted_ = true;
+    std::chrono::steady_clock::time_point next_retry_{};
 };
 
 class ScimitarBackend {
 public:
-    explicit ScimitarBackend(bool allow_software)
-        : allow_software_(allow_software) {}
+    explicit ScimitarBackend(const ScimitarInputMapper& input) : input_(input) {}
 
     bool open() {
         hid_device_info* devices =
@@ -911,14 +949,7 @@ public:
     }
 
     ~ScimitarBackend() {
-        if (device_ != nullptr) {
-            if (prepared_) {
-                constexpr std::array<unsigned char, 4> hardware{
-                    0x01, 0x03, 0x00, 0x01};
-                transfer(hardware.data(), hardware.size());
-            }
-            hid_close(device_);
-        }
+        reset(true);
     }
 
     bool set_color(Color color) {
@@ -926,7 +957,12 @@ public:
     }
 
     bool set_colors(const std::array<Color, 3>& colors) {
-        if (!allow_software_) {
+        // Software mode is what takes the 12 side buttons away, so it is only
+        // allowed while the agent is really remapping them. The check has to be
+        // live: the listener comes and goes with the USB switch, and reading it
+        // once at startup left the mouse dark for the rest of the session.
+        if (!input_.ready()) {
+            reset(true);
             return false;
         }
         if (std::chrono::steady_clock::now() < next_retry_) {
@@ -942,7 +978,7 @@ public:
         if (!prepared_) {
             if (!transfer(software.data(), software.size()) ||
                 !transfer(open_leds.data(), open_leds.size())) {
-                prepared_ = false;
+                reset(false);
                 defer_retry();
                 return false;
             }
@@ -962,13 +998,17 @@ public:
             payload.data(),
             payload.size());
         if (!success) {
-            prepared_ = false;
+            reset(false);
             defer_retry();
         }
         return success;
     }
 
     bool heartbeat_if_due() {
+        if (!input_.ready()) {
+            reset(true);
+            return true;
+        }
         if (device_ == nullptr) {
             return true;
         }
@@ -980,7 +1020,7 @@ public:
         last_heartbeat_ = now;
         const bool success = transfer(heartbeat.data(), heartbeat.size());
         if (!success) {
-            prepared_ = false;
+            reset(false);
             defer_retry();
         }
         return success;
@@ -992,6 +1032,9 @@ private:
         std::size_t endpoint_size,
         const unsigned char* payload = nullptr,
         std::size_t payload_size = 0) {
+        if (device_ == nullptr) {
+            return false;
+        }
         std::array<unsigned char, 65> output{};
         if (2 + endpoint_size + payload_size > output.size()) {
             return false;
@@ -1009,12 +1052,29 @@ private:
                    device_, response.data(), response.size(), kHidReadTimeoutMs) > 0;
     }
 
+    // A handle that outlived the dongle never works again: every transfer on
+    // it fails, and while it stays open the path is never enumerated afresh, so
+    // the mouse stays dark until the agent restarts. Same shape as K70Backend.
+    void reset(bool restore_hardware) {
+        if (device_ == nullptr) {
+            return;
+        }
+        if (restore_hardware && prepared_) {
+            constexpr std::array<unsigned char, 4> hardware{
+                0x01, 0x03, 0x00, 0x01};
+            transfer(hardware.data(), hardware.size());
+        }
+        hid_close(device_);
+        device_ = nullptr;
+        prepared_ = false;
+    }
+
     void defer_retry() {
         next_retry_ = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     }
 
+    const ScimitarInputMapper& input_;
     hid_device* device_ = nullptr;
-    bool allow_software_;
     bool prepared_ = false;
     std::chrono::steady_clock::time_point next_retry_{};
     std::chrono::steady_clock::time_point last_heartbeat_{};
@@ -1542,11 +1602,16 @@ int main(int argc, char** argv) {
     MM700Backend mm700;
     G560Backend g560;
     ScimitarInputMapper scimitar_input;
-    const bool scimitar_mapping_ready = scimitar_input.initialize();
-    std::cout << "scimitar-buttons="
-              << (scimitar_mapping_ready ? "ready" : "unavailable")
-              << std::endl;
-    ScimitarBackend scimitar(scimitar_mapping_ready);
+    const auto report_buttons = [&scimitar_input](bool ready) {
+        std::cout << "scimitar-buttons=" << (ready ? "ready" : "unavailable");
+        if (!ready) {
+            std::cout << " reason=" << scimitar_input.unavailable_reason();
+        }
+        std::cout << std::endl;
+    };
+    bool scimitar_buttons = scimitar_input.initialize();
+    report_buttons(scimitar_buttons);
+    ScimitarBackend scimitar(scimitar_input);
     Backends backends{k70, mm700, g560, scimitar};
     const auto effect_seconds = []() {
         return std::chrono::duration<double>(
@@ -1579,8 +1644,16 @@ int main(int argc, char** argv) {
                   << "; SignalRGB streaming is unavailable" << std::endl;
     }
 
+    // Drains the side-button reports and reopens the listener when the dongle
+    // comes back. Losing it is routine -- the USB switch does it on every
+    // hand-over -- so this only logs the transition.
     const auto pump = [&]() {
-        return !scimitar_mapping_ready || scimitar_input.poll();
+        const bool ready = scimitar_input.poll();
+        if (ready != scimitar_buttons) {
+            scimitar_buttons = ready;
+            report_buttons(ready);
+        }
+        return ready;
     };
     auto next_effect_frame =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(83);
@@ -1715,12 +1788,7 @@ int main(int argc, char** argv) {
         if (!mm700.heartbeat_if_due()) {
             std::cerr << "mm700 heartbeat failed" << std::endl;
         }
-        if (!pump()) {
-            std::cerr << "scimitar input listener failed" << std::endl;
-            stream.close_all();
-            close(server);
-            return 5;
-        }
+        pump();
     }
 
     stream.close_all();

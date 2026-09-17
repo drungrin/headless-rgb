@@ -68,14 +68,33 @@ echo "loaded: $launch_domain/com.headless-lights.agent"
 # The ad-hoc signature means TCC keys on the binary's CDHash, so every rebuild
 # invalidates the Accessibility grant even though the entry still shows in the
 # list. Say so here rather than letting it surface later as scimitar=error.
-if ! "$binary_dir/headless-lights-agent" --request-accessibility >/dev/null 2>&1; then
+#
+# Over ssh the question cannot be asked here at all: TCC answers for the
+# session's responsible process, so the ssh session's own grant reports every
+# binary it starts as trusted, including one TCC has never seen. Only the
+# launchd agent can answer for itself, and it does, in its log.
+if [ -n "${SSH_CONNECTION:-}" ]; then
+    echo
+    echo "accessibility: not checked (over ssh this check answers for the ssh"
+    echo "session, not for this build). The agent settles it:"
+    echo "  tail -n 4 \"$install_root/agent.log\""
+    echo "'scimitar-buttons=ready' means granted; 'reason=accessibility' means"
+    echo "this build still needs it. Every rebuild does: in System Settings >"
+    echo "Privacy & Security > Accessibility, remove any existing"
+    echo "'headless-lights-agent' entry and add this path again:"
+    echo "  $binary_dir/headless-lights-agent"
+    echo "Then restart the agent. Granting it is not enough on its own: a"
+    echo "running process keeps the answer TCC gave it when it launched."
+    echo "  launchctl kickstart -k $launch_domain/com.headless-lights.agent"
+elif ! "$binary_dir/headless-lights-agent" --request-accessibility >/dev/null 2>&1; then
     echo
     echo "Accessibility: NOT granted for this build."
     echo "The Scimitar needs it for RGB and for its 12 side buttons."
     echo "In System Settings > Privacy & Security > Accessibility, remove any"
     echo "existing 'headless-lights-agent' entry and add this path again:"
     echo "  $binary_dir/headless-lights-agent"
-    echo "Then restart the agent:"
+    echo "Then restart the agent. Granting it is not enough on its own: a"
+    echo "running process keeps the answer TCC gave it when it launched."
     echo "  launchctl kickstart -k $launch_domain/com.headless-lights.agent"
 else
     echo "accessibility: granted"
