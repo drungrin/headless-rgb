@@ -42,6 +42,11 @@ ADDONS: dict[str, dict[str, str]] = {
     "beelight": {
         "beelight.js": "signalrgb/beelight.js",
     },
+    # Regenerate this one with tools/vendor_bragi.py before syncing: it is
+    # SignalRGB's own Corsair plugin plus our side-button patch, not hand-written.
+    "bragi": {
+        "corsair-bragi-scimitar.js": "signalrgb/corsair-bragi-scimitar.js",
+    },
     "effects": {
         "watercolor.html": "signalrgb/effects/watercolor.html",
         "borderlands4.html": "signalrgb/effects/borderlands4.html",

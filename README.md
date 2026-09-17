@@ -19,8 +19,10 @@ iCUE, and no graphical session required on the Linux side.
 - systemd user services for persistent static colour or effects.
 - A C++ macOS agent that drives peripherals over direct HID, without the iCUE SDK.
 - Automatic Scimitar wireless recovery after a disconnect or timeout.
-- Two SignalRGB add-ons: one streams the Windows canvas to the Mac peripherals
-  per LED, the other drives the Beelight strip straight from Windows.
+- Three SignalRGB add-ons: one streams the Windows canvas to the Mac peripherals
+  per LED, one drives the Beelight strip straight from Windows, and one gives the
+  Scimitar its twelve side buttons back on Windows, where software mode takes
+  them away.
 - SignalRGB builds of all three effects, in the same clock phase as the Linux
   and macOS renderers.
 
@@ -39,6 +41,7 @@ or any other cooling parameter.
 | macOS | Corsair K70 MAX | 116 lit keys (142 hardware channels), direct HID |
 | macOS | Corsair MM700 RGB | 3 zones, direct HID |
 | macOS | Corsair Scimitar Elite Wireless SE | 3 RGB zones and 12 side buttons |
+| Windows | Corsair Scimitar Elite Wireless SE (`1b1c:2b00`) | the same 12 side buttons, through the SignalRGB add-on |
 | macOS | Logitech G560 | 4 zones, direct HID |
 
 Support is validated for this specific combination. Other models may work, but
@@ -55,6 +58,7 @@ are not guaranteed.
 | `tools/` | K70 layout generator, add-on sync and stream capture helpers |
 | `udev/` | udev rule scoping direct access to the identified controllers |
 | `tests/` | Python test suite |
+| `docs/` | notes on work whose reasoning outlived the change itself |
 
 ## Requirements
 
@@ -400,13 +404,89 @@ SignalRGB holds the serial port exclusively while it runs, so nothing else can
 drive the strip at the same time. That is not a regression: the Python CLI has
 always needed a POSIX host, and never worked on Windows.
 
-The canonical source stays in [`signalrgb/`](signalrgb/). Publish a change to
-either add-on with:
+### Scimitar side buttons on Windows
+
+SignalRGB puts the Scimitar Elite Wireless SE into software mode to paint its
+RGB. In that mode the mouse stops sending its twelve side buttons as ordinary
+input and reports them as a vendor bitmask on the Slipstream dongle instead —
+the same behaviour the macOS agent already works around. SignalRGB's own Corsair
+plugin decodes that bitmask correctly, but hands the presses to a macro engine
+whose binding UI does not load in 2.5.74:
+
+```text
+ThirdpartyMacroTab.qml: "../Macroblocks/": no such directory
+```
+
+So the device shows a Macros tab, the buttons produce events, and nothing
+receives them. A third add-on fixes that by sending a real Windows virtual key
+per button, chosen in the device's own settings:
+
+```text
+side button --bitmask--> SignalRGB plugin --virtual key--> Windows
+```
+
+It claims the Slipstream dongle (`1b1c:2b00`) and nothing else, so the K70 MAX,
+the MM700 and the iCUE LINK hub stay on the stock plugin. The buttons default to
+`1` through `=`, which is what the macOS agent injects, so the mouse behaves the
+same on both sides of the USB-C switch. Because only the input path is touched,
+changing an effect, a colour or the brightness never disturbs them. They work
+while SignalRGB runs, which is also what holds the mouse in software mode.
+
+That plugin is not written here: it is SignalRGB's own `Corsair_Bragi_Device.js`
+with our patch applied by a script, so a SignalRGB update is one command and a
+readable diff rather than a merge:
+
+```bash
+python tools/vendor_bragi.py --install    # regenerate and install it
+python tools/vendor_bragi.py --check      # fail if the committed fork is stale
+python tools/vendor_bragi.py --uninstall  # go back to the stock plugin
+```
+
+Restart SignalRGB afterwards. If an update moves one of the anchors the patch
+attaches to, the regeneration fails and names it, instead of producing a plugin
+that silently lost the change.
+
+**This one is not installed as an add-on**, unlike the other two, and the reason
+is worth recording. SignalRGB keeps three plugin sources, and for a given
+`VID:PID` the last one crawled wins. Add-ons added by URL are crawled *before*
+the shipped plugins: this fork registered `1b1c:2b00` from an add-on and the
+stock Corsair plugin immediately took it back, which the crawler log states
+plainly. The app's own plugin folder is crawled after, and does win, so
+`--install` writes there:
+
+```text
+%LOCALAPPDATA%\VortxEngine\app-<version>\Signal-x64\Plugins\ZZZ_Corsair_Bragi_Scimitar.js
+```
+
+A SignalRGB update installs a new `app-<version>` folder and leaves that copy
+behind, so rerun `--install` after one. The log line to confirm it took is:
+
+```text
+HID plugin with id 0x1B1C:0x2B00 already exists. Overwriting with new path: ...ZZZ_Corsair_Bragi_Scimitar.js
+```
+
+and the device then logs as `Corsair Bragi Device (Scimitar side buttons)` while
+the K70 MAX stays on plain `Corsair Bragi Device`.
+
+To see the raw reports the dongle sends, which is how the bit-to-button order
+was established, use the Windows counterpart of the macOS probe:
+
+```bash
+python tools/scimitar_input_probe.py 20
+```
+
+The canonical source stays in [`signalrgb/`](signalrgb/). Publish a change with:
 
 ```bash
 python tools/sync_addon.py beelight ../signalrgb-beelight
 python tools/sync_addon.py mac ../signalrgb-mac-bridge --check
+python tools/sync_addon.py bragi ../signalrgb-corsair-bragi-scimitar
 ```
+
+The Corsair fork is published at
+[`drungrin/signalrgb-corsair-bragi-scimitar`](https://github.com/drungrin/signalrgb-corsair-bragi-scimitar)
+for distribution only; it is installed with `vendor_bragi.py --install`, not
+through **Settings → Add-ons**.
 
 Two platform notes: the Python package installs and runs on Windows, but the
 Beelight strip commands need a POSIX host, and the `*-service-install` commands
@@ -459,6 +539,10 @@ so a plugin and its device cannot drift apart silently:
   serial port, feeds it acknowledgements encoded by
   `headless_lights.beelight.protocol`, and decodes everything it writes back
   with that same module.
+- `tests/test_bragi_side_buttons.py` drives the Corsair fork's input path with
+  the report shape `tools/scimitar_input_probe.py` captured from the dongle, and
+  checks the virtual keys it sends, so a wrong bit window or a broken keymap
+  fails here instead of typing the wrong character.
 - `tests/test_watercolor_effect.py` runs the effect against a fake canvas and
   checks every gradient stop it produces against
   `headless_lights.effects.watercolor_color` at the same instant, so the
