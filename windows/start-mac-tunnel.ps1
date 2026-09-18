@@ -16,10 +16,16 @@ MacHost is whatever ~/.ssh/config calls the Mac.
 powershell -ExecutionPolicy Bypass -File windows\start-mac-tunnel.ps1
 
 .EXAMPLE
-Register it to run at logon (adjust the repo path if you moved it):
+Register it to run at logon (adjust the repo path if you moved it). /np runs the
+task as the current user without a stored password, which places it in session 0
+where no console window exists. Without it the task is interactive and a console
+flashes at every logon: Windows creates the window before powershell.exe parses
+-WindowStyle Hidden. Nothing here needs the desktop -- loopback UDP crosses
+sessions, and SSH authenticates with a key rather than a Windows credential.
 
     schtasks /create /tn "headless-lights Mac bridge" /sc onlogon /rl limited ^
-      /tr "powershell -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\Users\Michel\Projetos\headless-rgb\windows\start-mac-tunnel.ps1"
+      /ru %USERNAME% /np ^
+      /tr "powershell -ExecutionPolicy Bypass -File C:\Users\Michel\Projetos\headless-rgb\windows\start-mac-tunnel.ps1"
 #>
 
 [CmdletBinding()]
@@ -30,24 +36,6 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-
-# Task Scheduler may create a console host even when powershell.exe receives
-# -WindowStyle Hidden, especially after console child processes are attached.
-# Hide the actual console window explicitly before writing any status output.
-Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public static class HeadlessConsole {
-    [DllImport("kernel32.dll")]
-    public static extern IntPtr GetConsoleWindow();
-    [DllImport("user32.dll")]
-    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-}
-'@
-$console = [HeadlessConsole]::GetConsoleWindow()
-if ($console -ne [IntPtr]::Zero) {
-    [HeadlessConsole]::ShowWindow($console, 0) | Out-Null
-}
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $bridgeScript = Join-Path $scriptDir 'signalrgb-mac-bridge.py'
